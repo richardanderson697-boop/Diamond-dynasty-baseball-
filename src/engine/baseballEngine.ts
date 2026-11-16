@@ -10,6 +10,7 @@ import {
   SeriesResult,
   Team,
 } from '../types/baseball';
+import { getStadiumByTeamId } from '../data/stadiums';
 
 export const FIRST_NAMES = [
   'Marcus', 'Jalen', 'Bryce', 'Shohei', 'Mookie', 'Freddie', 'Gerrit', 'Corbin',
@@ -482,7 +483,7 @@ export function generateSeasonSchedule(teams: Team[]): ScheduleDay[] {
   return schedule;
 }
 
-function buildLineupAndPitching(roster: Player[]) {
+export function buildLineupAndPitching(roster: Player[]) {
   const hitters = roster.filter((p) => !p.isPitcher).sort((a, b) => b.ovr - a.ovr);
   const sps = roster.filter((p) => p.position === 'SP').sort((a, b) => b.ovr - a.ovr);
   const rps = roster.filter((p) => p.position === 'RP').sort((a, b) => b.ovr - a.ovr);
@@ -517,6 +518,8 @@ export function simulateSingleGame(
   awayRoster: Player[],
   gameDay: number
 ) {
+  const stadium = getStadiumByTeamId(homeTeam.id);
+  const { hrFactor, doublesFactor, triplesFactor, foulOutFactor, kFactor } = stadium.parkFactors;
   const homeSetup = buildLineupAndPitching(homeRoster);
   const awaySetup = buildLineupAndPitching(awayRoster);
 
@@ -605,8 +608,15 @@ export function simulateSingleGame(
       const diff = (hitSkill + platoonEdge - pitchSkill) / 100;
 
       const bbProb = clamp(7.5 + (60 - pCtl) * 0.11 + diff * 4, 3, 18) / 100;
-      const soProb = clamp(21.5 + (pVel * 0.55 + pFin * 0.45 - 60) * 0.18 - diff * 8, 9, 38) / 100;
-      const hitProb = clamp(24.5 + diff * 13 - (fieldGlove - 60) * 0.08, 14, 36) / 100;
+      const soProb =
+        (clamp(21.5 + (pVel * 0.55 + pFin * 0.45 - 60) * 0.18 - diff * 8, 9, 38) / 100) *
+        kFactor;
+      const hitProb =
+        clamp(
+          24.5 + diff * 13 - (fieldGlove - 60) * 0.08 - (foulOutFactor - 1) * 7.5,
+          13,
+          37
+        ) / 100;
 
       const roll = Math.random();
       if (roll < bbProb) {
@@ -634,9 +644,12 @@ export function simulateSingleGame(
         bStat.h++;
         pStat.h++;
 
-        const hrProb = clamp(7 + (bPow - 55) * 0.24 - (pFin - 60) * 0.08, 2, 26) / 100;
-        const tripleProb = clamp(1.5 + (bSpd - 60) * 0.06, 0.3, 6) / 100;
-        const doubleProb = clamp(17 + (bPow * 0.5 + bSpd * 0.5 - 60) * 0.15, 8, 28) / 100;
+        const hrProb =
+          (clamp(7 + (bPow - 55) * 0.24 - (pFin - 60) * 0.08, 2, 26) / 100) * hrFactor;
+        const tripleProb =
+          (clamp(1.5 + (bSpd - 60) * 0.06, 0.3, 6) / 100) * triplesFactor;
+        const doubleProb =
+          (clamp(17 + (bPow * 0.5 + bSpd * 0.5 - 60) * 0.15, 8, 28) / 100) * doublesFactor;
 
         const hitRoll = Math.random();
         if (hitRoll < hrProb) {

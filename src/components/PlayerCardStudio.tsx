@@ -14,6 +14,7 @@ import {
   getPitcherRatios,
 } from '../engine/baseballEngine';
 import { AttributeRadarSvg, getCardThemeClasses, RatingBadge, TeamBadge } from './SharedBadges';
+import { PlayerAvatarSvg } from './PlayerAvatarSvg';
 
 interface PlayerCardStudioProps {
   savedCards: SavedPlayerCard[];
@@ -409,12 +410,20 @@ export function PlayerCardStudio({
             <div className={`rounded-2xl border overflow-hidden ${previewThemeStyle.frame}`}>
               <div className={`px-5 py-4 flex items-center justify-between ${previewThemeStyle.headerBg}`}>
                 <div className="flex items-center gap-3 min-w-0">
-                  <TeamBadge team={destination === 'ROSTER' ? userTeam : null} size="lg" />
+                  <PlayerAvatarSvg
+                    player={previewPlayer}
+                    team={destination === 'ROSTER' ? userTeam : null}
+                    theme={cardTheme}
+                    size={62}
+                  />
                   <div className="min-w-0">
-                    <div className="font-display text-2xl font-extrabold text-white truncate">
-                      {previewPlayer.name}
+                    <div className="flex items-center gap-2">
+                      <TeamBadge team={destination === 'ROSTER' ? userTeam : null} size="sm" />
+                      <div className="font-display text-2xl font-extrabold text-white truncate">
+                        {previewPlayer.name}
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-300 font-mono">
+                    <div className="text-xs text-slate-300 font-mono mt-0.5">
                       {previewPlayer.position} · Age {previewPlayer.age} · B/T {previewPlayer.bats}/{previewPlayer.throws}
                     </div>
                   </div>
@@ -479,12 +488,15 @@ export function PlayerCardStudio({
                   <div key={card.id} className={`rounded-2xl border overflow-hidden flex flex-col ${style.frame}`}>
                     <div className={`px-4 py-3 flex items-center justify-between gap-2 ${style.headerBg}`}>
                       <div className="flex items-center gap-2.5 min-w-0">
-                        <TeamBadge team={team} />
+                        <PlayerAvatarSvg player={card} team={team} theme={card.cardTheme} size={52} />
                         <div className="min-w-0">
-                          <div className="font-display text-lg font-extrabold text-white truncate">
-                            {card.name}
+                          <div className="flex items-center gap-1.5">
+                            <TeamBadge team={team} size="sm" />
+                            <div className="font-display text-lg font-extrabold text-white truncate">
+                              {card.name}
+                            </div>
                           </div>
-                          <div className="text-[11px] font-mono text-slate-400">
+                          <div className="text-[11px] font-mono text-slate-400 mt-0.5 truncate">
                             {card.position} · Age {card.age} · {card.bats}/{card.throws} · {card.isCustom ? 'Custom' : 'Scouted'}
                           </div>
                         </div>

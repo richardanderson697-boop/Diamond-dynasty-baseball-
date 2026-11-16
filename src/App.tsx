@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   Activity,
-  AlertCircle,
   ArrowLeftRight,
   BarChart3,
   Check,
   Cloud,
+  ExternalLink,
   FastForward,
   FileText,
+  HardDrive,
   IdCard,
   ListOrdered,
   LogIn,
@@ -21,11 +23,19 @@ import {
   Trash2,
   TrendingUp,
   Trophy,
+  Tv,
   UserPlus,
   Users,
 } from 'lucide-react';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
-import { auth, googleProvider } from './firebase';
+import {
+  auth,
+  FIRESTORE_PRICING_URL,
+  FIRESTORE_QUOTA_UPGRADE_URL,
+  googleProvider,
+  isQuotaExceededError,
+  subscribeQuotaExceeded,
+} from './firebase';
 import {
   buildSeasonSnapshotData,
   calculateOverall,
@@ -47,10 +57,17 @@ import {
 } from './engine/baseballEngine';
 import {
   deleteFranchiseFromCloud,
+  deleteLocalFranchiseBackup,
   deleteSavedPlayerCard,
+  isCloudQuotaPaused,
+  listLocalFranchiseBackups,
   loadFranchiseChunksFromCloud,
+  loadLocalFranchiseBackup,
+  LocalBackupMeta,
   recordSeasonSnapshot,
+  resetCloudQuotaPause,
   saveFullFranchiseToCloud,
+  saveLocalFranchiseBackup,
   subscribeToFranchises,
   subscribeToLeagueRecords,
   subscribeToSavedPlayers,
@@ -87,6 +104,7 @@ import { WaiverPoolView } from './components/WaiverPoolView';
 import { TradeCenterView } from './components/TradeCenterView';
 import { DraftRoomView } from './components/DraftRoomView';
 import { TransactionsLogView } from './components/TransactionsLogView';
+import { LiveGameCanvas, LiveGameResult } from './components/LiveGameCanvas';
 
 export default function App() {
   // Firebase Auth State
@@ -95,8 +113,11 @@ export default function App() {
 
   // Cloud Franchise Registry & Sync State
   const [cloudFranchises, setCloudFranchises] = useState<FranchiseSummary[]>([]);
+  const [localBackups, setLocalBackups] = useState<LocalBackupMeta[]>(() => listLocalFranchiseBackups());
   const [activeFranchiseId, setActiveFranchiseId] = useState<string | null>(null);
-  const [syncState, setSyncState] = useState<'idle' | 'saving' | 'synced' | 'error'>('idle');
+  const [syncState, setSyncState] = useState<'idle' | 'saving' | 'synced' | 'quota' | 'error'>(() =>
+    isCloudQuotaPaused() ? 'quota' : 'idle'
+  );
   const [loadingFranchiseId, setLoadingFranchiseId] = useState<string | null>(null);
 
   // Game Lifecycle States
@@ -143,14 +164,21 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toastMsg]);
 
-  // Auth Listener
+  // Auth & Quota Listeners
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (u) => {
+    const unsubAuth = onAuthStateChanged(auth, (u) => {
       setAuthUser(u);
       setAuthReady(true);
     });
-    return () => unsub();
-  }, []);
+    const unsubQuota = subscribeQuotaExceeded(() => {
+      setSyncState('quota');
+      showToast('Daily Firestore write quota reached. Progress is auto-saved locally.', 'warning');
+    });
+    return () => {
+      unsubAuth();
+      unsubQuota();
+    };
+  }, [showToast]);
 
   // Real-time Franchises List Subscription
   useEffect(() => {
@@ -204,12 +232,39 @@ export default function App() {
     [year, currentDay]
   );
 
-  // Cloud Sync Helper (persists full franchise + chunks cleanly)
+  const handleCloudWriteError = useCallback(
+    (err: unknown, silent = false) => {
+      if (isQuotaExceededError(err) || isCloudQuotaPaused()) {
+        setSyncState((prev) => {
+          if (prev !== 'quota' && !silent) {
+            showToast(
+              'Daily Firestore write quota reached. Progress is auto-saved locally.',
+              'warning'
+            );
+          }
+          return 'quota';
+        });
+      } else {
+        setSyncState('error');
+        if (!silent) {
+          showToast('Cloud sync failed. Changes remain active locally.', 'error');
+        }
+        console.error(err);
+      }
+    },
+    [showToast]
+  );
+
+  // Cloud + Local Auto-Save Helper (minimizes Firestore write units on routine ticks)
   const syncFranchiseSnapshotRef = useRef(0);
   const persistToCloud = useCallback(
     async (overrides?: Partial<{
       franchiseId: string;
+      userTeamId: string;
       isNew: boolean;
+      includePlayers: boolean;
+      includeScheduleAndDraft: boolean;
+      skipCloud: boolean;
       phase: GamePhase;
       year: number;
       currentDay: number;
@@ -225,49 +280,70 @@ export default function App() {
       championsHistory: ChampionHistoryEntry[];
       transactions: TransactionEntry[];
       recentGames: RecentGameEntry[];
+      savedCards: SavedPlayerCard[];
+      seasonSnapshots: SeasonSnapshot[];
+      leagueRecords: LeagueRecord[];
     }>) => {
-      if (!authUser) return;
-      const fid = overrides?.franchiseId ?? activeFranchiseId;
-      if (!fid) return;
-
+      const targetUserTeamId = overrides?.userTeamId ?? userTeamId;
+      const fid = overrides?.franchiseId ?? activeFranchiseId ?? `LOCAL_${targetUserTeamId}`;
       const tList = overrides?.teams ?? teams;
-      const uTeam = tList.find((t) => t.id === userTeamId);
-      const franchiseName = uTeam ? `${uTeam.city} ${uTeam.name} Dynasty` : `${userTeamId} Dynasty`;
+      const uTeam = tList.find((t) => t.id === targetUserTeamId);
+      const franchiseName = uTeam ? `${uTeam.city} ${uTeam.name} Dynasty` : `${targetUserTeamId} Dynasty`;
+
+      const fullData = {
+        franchiseId: fid,
+        ownerId: authUser?.uid || 'local',
+        name: franchiseName,
+        userTeamId: targetUserTeamId,
+        year: overrides?.year ?? year,
+        phase: overrides?.phase ?? phase,
+        currentDay: overrides?.currentDay ?? currentDay,
+        currentPickIdx: overrides?.currentPickIdx ?? currentPickIdx,
+        teams: tList,
+        championsHistory: overrides?.championsHistory ?? championsHistory,
+        transactions: overrides?.transactions ?? transactions,
+        recentGames: overrides?.recentGames ?? recentGames,
+        playoffResults: overrides?.playoffResults !== undefined ? overrides.playoffResults : playoffResults,
+        players: overrides?.players ?? players,
+        draftPool: overrides?.draftPool ?? draftPool,
+        schedule: overrides?.schedule ?? schedule,
+        draftPicks: overrides?.draftPicks ?? draftPicks,
+        draftOrder: overrides?.draftOrder ?? draftOrder,
+        draftHistory: overrides?.draftHistory ?? draftHistory,
+      };
+
+      // Always write compact local backup first so state is never lost
+      saveLocalFranchiseBackup({
+        ...fullData,
+        playoffResults: fullData.playoffResults ?? null,
+        savedCards: overrides?.savedCards ?? savedCards,
+        seasonSnapshots: overrides?.seasonSnapshots ?? seasonSnapshots,
+        leagueRecords: overrides?.leagueRecords ?? leagueRecords,
+        savedAtMs: Date.now(),
+      });
+      setLocalBackups(listLocalFranchiseBackups());
+
+      if (!authUser || (!activeFranchiseId && !overrides?.franchiseId)) return;
+      if (overrides?.skipCloud) return;
+
+      if (isCloudQuotaPaused()) {
+        setSyncState('quota');
+        return;
+      }
 
       const seq = ++syncFranchiseSnapshotRef.current;
       setSyncState('saving');
       try {
-        await saveFullFranchiseToCloud(
-          {
-            franchiseId: fid,
-            ownerId: authUser.uid,
-            name: franchiseName,
-            userTeamId,
-            year: overrides?.year ?? year,
-            phase: overrides?.phase ?? phase,
-            currentDay: overrides?.currentDay ?? currentDay,
-            currentPickIdx: overrides?.currentPickIdx ?? currentPickIdx,
-            teams: tList,
-            championsHistory: overrides?.championsHistory ?? championsHistory,
-            transactions: overrides?.transactions ?? transactions,
-            recentGames: overrides?.recentGames ?? recentGames,
-            playoffResults: overrides?.playoffResults !== undefined ? overrides.playoffResults : playoffResults,
-            players: overrides?.players ?? players,
-            draftPool: overrides?.draftPool ?? draftPool,
-            schedule: overrides?.schedule ?? schedule,
-            draftPicks: overrides?.draftPicks ?? draftPicks,
-            draftOrder: overrides?.draftOrder ?? draftOrder,
-            draftHistory: overrides?.draftHistory ?? draftHistory,
-          },
-          Boolean(overrides?.isNew)
-        );
+        await saveFullFranchiseToCloud(fullData, {
+          isNew: Boolean(overrides?.isNew),
+          includePlayers: overrides?.includePlayers ?? true,
+          includeScheduleAndDraft: overrides?.includeScheduleAndDraft ?? Boolean(overrides?.isNew),
+        });
         if (seq === syncFranchiseSnapshotRef.current) {
           setSyncState('synced');
         }
       } catch (err) {
-        setSyncState('error');
-        showToast('Cloud sync failed. Changes remain active locally.', 'error');
-        console.error(err);
+        handleCloudWriteError(err);
       }
     },
     [
@@ -289,9 +365,29 @@ export default function App() {
       draftPicks,
       draftOrder,
       draftHistory,
-      showToast,
+      savedCards,
+      seasonSnapshots,
+      leagueRecords,
+      handleCloudWriteError,
     ]
   );
+
+  const handleRetryCloudSync = async () => {
+    if (!authUser || !activeFranchiseId) return;
+    await resetCloudQuotaPause();
+    setSyncState('saving');
+    try {
+      await persistToCloud({
+        includePlayers: true,
+        includeScheduleAndDraft: true,
+      });
+      if (!isCloudQuotaPaused()) {
+        showToast('Cloud sync restored.', 'success');
+      }
+    } catch (err) {
+      handleCloudWriteError(err);
+    }
+  };
 
   // Derived Lookups
   const teamMap = useMemo(() => {
@@ -318,6 +414,17 @@ export default function App() {
     waivers.sort((a, b) => b.ovr - a.ovr);
     return { byTeam: map, waivers };
   }, [players, teams]);
+
+  const todayUserMatchup = useMemo(() => {
+    if (phase !== 'REGULAR_SEASON' || currentDay >= 162) return null;
+    const dayGames = schedule[currentDay] || [];
+    const pair = dayGames.find(([h, a]) => h === userTeamId || a === userTeamId);
+    if (!pair) return null;
+    const homeTeam = teamMap[pair[0]];
+    const awayTeam = teamMap[pair[1]];
+    if (!homeTeam || !awayTeam) return null;
+    return { homeTeam, awayTeam };
+  }, [phase, currentDay, schedule, userTeamId, teamMap]);
 
   // ==========================================================================
   // START NEW FRANCHISE OR RESUME FROM FIREBASE
@@ -381,7 +488,10 @@ export default function App() {
       setActiveFranchiseId(newFranchiseId);
       await persistToCloud({
         franchiseId: newFranchiseId,
+        userTeamId: chosenTeamId,
         isNew: true,
+        includePlayers: true,
+        includeScheduleAndDraft: true,
         phase: 'INAUGURAL_DRAFT',
         year: 2026,
         currentDay: 0,
@@ -397,16 +507,91 @@ export default function App() {
         championsHistory: [],
         transactions: initTx,
         recentGames: [],
+        savedCards: [],
+        seasonSnapshots: [],
+        leagueRecords: [],
       });
     } else {
       setActiveFranchiseId(null);
+      void persistToCloud({
+        franchiseId: newFranchiseId,
+        userTeamId: chosenTeamId,
+        skipCloud: true,
+        phase: 'INAUGURAL_DRAFT',
+        year: 2026,
+        currentDay: 0,
+        currentPickIdx: 0,
+        teams: initTeams,
+        players: [],
+        draftPool: pool,
+        schedule: sched,
+        draftPicks: initPicks,
+        draftOrder: order,
+        draftHistory: [],
+        playoffResults: null,
+        championsHistory: [],
+        transactions: initTx,
+        recentGames: [],
+        savedCards: [],
+        seasonSnapshots: [],
+        leagueRecords: [],
+      });
     }
+  };
+
+  const resumeLocalBackup = (franchiseId: string) => {
+    const backup = loadLocalFranchiseBackup(franchiseId);
+    if (!backup) {
+      showToast('Local dynasty backup not found.', 'error');
+      return;
+    }
+    setUserTeamId(backup.userTeamId);
+    setYear(backup.year);
+    setPhase(backup.phase);
+    setCurrentDay(backup.currentDay);
+    setCurrentPickIdx(backup.currentPickIdx);
+    setTeams(backup.teams);
+    setPlayers(backup.players);
+    setDraftPool(backup.draftPool);
+    setSchedule(backup.schedule);
+    setDraftPicks(backup.draftPicks);
+    setDraftOrder(backup.draftOrder);
+    setDraftHistory(backup.draftHistory);
+    setPlayoffResults(backup.playoffResults);
+    setChampionsHistory(backup.championsHistory);
+    setTransactions(backup.transactions);
+    setRecentGames(backup.recentGames);
+    setSavedCards(backup.savedCards || []);
+    setSeasonSnapshots(backup.seasonSnapshots || []);
+    setLeagueRecords(backup.leagueRecords || []);
+    setActiveFranchiseId(backup.franchiseId.startsWith('FRAN_') ? backup.franchiseId : null);
+    setSyncState(isCloudQuotaPaused() ? 'quota' : 'idle');
+    setActiveTab(
+      backup.phase === 'INAUGURAL_DRAFT' || backup.phase === 'ROOKIE_DRAFT' ? 'draft' : 'dashboard'
+    );
+    showToast(`Loaded local auto-save: ${backup.name} (${backup.year} · Day ${backup.currentDay}).`, 'info');
   };
 
   const resumeCloudFranchise = async (franchise: FranchiseSummary) => {
     if (!authUser) return;
     setLoadingFranchiseId(franchise.id);
     try {
+      const localBackup = loadLocalFranchiseBackup(franchise.id);
+      const localIsAhead =
+        localBackup &&
+        (localBackup.year > franchise.year ||
+          (localBackup.year === franchise.year && localBackup.currentDay > franchise.currentDay));
+
+      if (localIsAhead && localBackup) {
+        resumeLocalBackup(franchise.id);
+        setActiveFranchiseId(franchise.id);
+        showToast(
+          `Resumed newer local auto-save (${localBackup.year} · Day ${localBackup.currentDay}).`,
+          'info'
+        );
+        return;
+      }
+
       const chunks = await loadFranchiseChunksFromCloud(franchise.id, authUser.uid);
       setUserTeamId(franchise.userTeamId);
       setYear(franchise.year);
@@ -427,7 +612,7 @@ export default function App() {
       setDraftHistory(chunks.draftHistory);
 
       setActiveFranchiseId(franchise.id);
-      setSyncState('synced');
+      setSyncState(isCloudQuotaPaused() ? 'quota' : 'synced');
       setActiveTab(
         franchise.phase === 'INAUGURAL_DRAFT' || franchise.phase === 'ROOKIE_DRAFT'
           ? 'draft'
@@ -435,6 +620,11 @@ export default function App() {
       );
       showToast(`Loaded ${franchise.name} (${franchise.year} · Day ${franchise.currentDay}).`, 'success');
     } catch (err) {
+      const localBackup = loadLocalFranchiseBackup(franchise.id);
+      if (localBackup) {
+        resumeLocalBackup(franchise.id);
+        return;
+      }
       showToast('Failed to load franchise chunks from Firestore.', 'error');
       console.error(err);
     } finally {
@@ -445,14 +635,22 @@ export default function App() {
   const handleDeleteCloudFranchise = async (franchiseId: string) => {
     try {
       await deleteFranchiseFromCloud(franchiseId);
+      deleteLocalFranchiseBackup(franchiseId);
+      setLocalBackups(listLocalFranchiseBackups());
       if (activeFranchiseId === franchiseId) {
         setActiveFranchiseId(null);
         setPhase('SETUP');
       }
       showToast('Saved franchise deleted.', 'info');
-    } catch {
-      showToast('Could not delete franchise.', 'error');
+    } catch (err) {
+      handleCloudWriteError(err);
     }
+  };
+
+  const handleDeleteLocalBackup = (franchiseId: string) => {
+    deleteLocalFranchiseBackup(franchiseId);
+    setLocalBackups(listLocalFranchiseBackups());
+    showToast('Local auto-save removed.', 'info');
   };
 
   // ==========================================================================
@@ -511,6 +709,8 @@ export default function App() {
         showToast('Inaugural Draft Complete. Opening Day is ready.', 'success');
         void persistToCloud({
           phase: 'REGULAR_SEASON',
+          includePlayers: true,
+          includeScheduleAndDraft: true,
           players: mergedPlayers,
           draftPool: [],
           draftHistory: nextHist,
@@ -568,6 +768,8 @@ export default function App() {
 
         void persistToCloud({
           phase: nextPhase,
+          includePlayers: true,
+          includeScheduleAndDraft: true,
           players: finalCombined,
           draftPool: [],
           draftHistory: nextHist,
@@ -673,7 +875,7 @@ export default function App() {
   // REGULAR SEASON SIMULATION, TRENDS & RECORD BOOK UPDATES
   // ==========================================================================
 
-  const simulateDays = (numDays: number) => {
+  const applyDaysSimulation = (numDays: number, liveOverride?: LiveGameResult) => {
     if (phase !== 'REGULAR_SEASON' || currentDay >= 162) return;
 
     const targetDay = Math.min(162, currentDay + numDays);
@@ -709,7 +911,14 @@ export default function App() {
         const homeT = tLookup[homeId];
         const awayT = tLookup[awayId];
         if (!homeT || !awayT) continue;
-        const res = simulateSingleGame(homeT, awayT, rosterLookup[homeId], rosterLookup[awayId], d);
+        const useLive =
+          liveOverride &&
+          d === currentDay &&
+          homeId === liveOverride.homeTeamId &&
+          awayId === liveOverride.awayTeamId;
+        const res = useLive
+          ? liveOverride
+          : simulateSingleGame(homeT, awayT, rosterLookup[homeId], rosterLookup[awayId], d);
 
         homeT.runsScored += res.homeRuns;
         homeT.runsAllowed += res.awayRuns;
@@ -880,57 +1089,89 @@ export default function App() {
       existingRecords: leagueRecords,
     });
 
-    // Update local state immediately for non-auth or instant responsiveness
+    // Update local state immediately for instant UI responsiveness
     const snapId = `SNAP_${year}_D${targetDay}${targetDay >= 162 ? '_FINAL' : ''}`;
-    setSeasonSnapshots((prev) => {
-      const filtered = prev.filter((s) => s.id !== snapId);
-      return [...filtered, { id: snapId, ...snapPayload }].sort((a, b) => a.year - b.year || a.day - b.day);
+    const nextSnapshots = [
+      ...seasonSnapshots.filter((s) => s.id !== snapId),
+      { id: snapId, ...snapPayload },
+    ].sort((a, b) => a.year - b.year || a.day - b.day);
+    setSeasonSnapshots(nextSnapshots);
+
+    let nextRecords = leagueRecords;
+    if (recordUpdates.length > 0) {
+      const map = new Map(leagueRecords.map((r) => [r.recordKey, r]));
+      recordUpdates.forEach((u) => {
+        map.set(u.recordKey, { id: u.recordKey, ...u });
+      });
+      nextRecords = Array.from(map.values());
+      setLeagueRecords(nextRecords);
+    }
+
+    // Checkpoints to minimize Firestore write units (>95% reduction)
+    const crossedSeasonEnd = targetDay >= 162;
+    const crossedMonth = Math.floor(targetDay / 30) > Math.floor(currentDay / 30) || crossedSeasonEnd;
+    const crossedBiWeekly =
+      Math.floor(targetDay / 14) > Math.floor(currentDay / 14) || numDays >= 14 || crossedSeasonEnd;
+    const crossedWeek =
+      Math.floor(targetDay / 7) > Math.floor(currentDay / 7) || numDays >= 7 || crossedMonth;
+
+    const shouldSyncCloud = Boolean(authUser && activeFranchiseId && !isCloudQuotaPaused());
+
+    // Always persist full state locally; sync to cloud at weekly/milestone checkpoints
+    void persistToCloud({
+      skipCloud: !shouldSyncCloud || !crossedWeek,
+      includePlayers: crossedMonth,
+      includeScheduleAndDraft: false,
+      phase: nextPhase,
+      currentDay: targetDay,
+      teams: workingTeams,
+      players: workingPlayers,
+      recentGames: updatedRecentGames,
+      transactions: updatedTransactions,
+      playoffResults: nextPlayoffs,
+      championsHistory: nextChamps,
+      seasonSnapshots: nextSnapshots,
+      leagueRecords: nextRecords,
     });
 
-    if (recordUpdates.length > 0) {
-      setLeagueRecords((prev) => {
-        const map = new Map(prev.map((r) => [r.recordKey, r]));
-        recordUpdates.forEach((u) => {
-          map.set(u.recordKey, { id: u.recordKey, ...u });
-        });
-        return Array.from(map.values());
-      });
-    }
-
-    // Sync to Firebase in real time
-    if (authUser && activeFranchiseId) {
-      void recordSeasonSnapshot(snapPayload);
-      if (recordUpdates.length > 0) {
-        void upsertLeagueRecords(activeFranchiseId, recordUpdates, leagueRecords);
+    if (shouldSyncCloud && activeFranchiseId) {
+      if (crossedBiWeekly) {
+        void recordSeasonSnapshot(snapPayload).catch((err) => handleCloudWriteError(err, true));
       }
-      // Also update saved player cards live season stats if any match
-      const matchingSaved = savedCards.filter((c) => workingPlayers.some((p) => p.id === c.playerId));
-      matchingSaved.forEach((card) => {
-        const liveP = workingPlayers.find((p) => p.id === card.playerId);
-        if (liveP) {
-          void upsertSavedPlayerCard(
-            {
-              ...card,
-              teamId: liveP.teamId || 'FA',
-              seasonStats: liveP.seasonStats,
-              careerStats: liveP.careerStats,
-            },
-            false
-          );
-        }
-      });
-
-      void persistToCloud({
-        phase: nextPhase,
-        currentDay: targetDay,
-        teams: workingTeams,
-        players: workingPlayers,
-        recentGames: updatedRecentGames,
-        transactions: updatedTransactions,
-        playoffResults: nextPlayoffs,
-        championsHistory: nextChamps,
-      });
+      if ((crossedMonth || numDays >= 30) && recordUpdates.length > 0) {
+        void upsertLeagueRecords(activeFranchiseId, recordUpdates, leagueRecords).catch((err) =>
+          handleCloudWriteError(err, true)
+        );
+      }
+      if (crossedMonth) {
+        const matchingSaved = savedCards.filter((c) => workingPlayers.some((p) => p.id === c.playerId));
+        matchingSaved.forEach((card) => {
+          const liveP = workingPlayers.find((p) => p.id === card.playerId);
+          if (liveP) {
+            void upsertSavedPlayerCard(
+              {
+                ...card,
+                teamId: liveP.teamId || 'FA',
+                seasonStats: liveP.seasonStats,
+                careerStats: liveP.careerStats,
+              },
+              false
+            ).catch((err) => handleCloudWriteError(err, true));
+          }
+        });
+      }
     }
+  };
+
+  const simulateDays = (numDays: number) => applyDaysSimulation(numDays);
+
+  const commitLiveGameResult = (liveResult: LiveGameResult) => {
+    applyDaysSimulation(1, liveResult);
+    setActiveTab('dashboard');
+    showToast(
+      `Final committed: ${liveResult.awayTeamId} ${liveResult.awayRuns} @ ${liveResult.homeTeamId} ${liveResult.homeRuns}`,
+      'success'
+    );
   };
 
   // ==========================================================================
@@ -1069,6 +1310,8 @@ export default function App() {
     void persistToCloud({
       year: nextYear,
       phase: 'ROOKIE_DRAFT',
+      includePlayers: true,
+      includeScheduleAndDraft: true,
       currentDay: 0,
       currentPickIdx: 0,
       teams: resetTeams,
@@ -1119,7 +1362,12 @@ export default function App() {
     setPlayers(nextPlayers);
     setTransactions(nextTx);
     showToast(msg, 'success');
-    void persistToCloud({ players: nextPlayers, transactions: nextTx });
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
   };
 
   const handleReleasePlayer = (dropPlayerId: string) => {
@@ -1136,7 +1384,12 @@ export default function App() {
     setPlayers(nextPlayers);
     setTransactions(nextTx);
     showToast(`Released ${dropPlr.name} to waivers.`, 'info');
-    void persistToCloud({ players: nextPlayers, transactions: nextTx });
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
   };
 
   const confirmRosterCutsComplete = () => {
@@ -1148,7 +1401,11 @@ export default function App() {
     setPhase('REGULAR_SEASON');
     setActiveTab('dashboard');
     showToast(`30-man roster finalized for ${year}.`, 'success');
-    void persistToCloud({ phase: 'REGULAR_SEASON' });
+    void persistToCloud({
+      phase: 'REGULAR_SEASON',
+      includePlayers: false,
+      includeScheduleAndDraft: false,
+    });
   };
 
   const executeTrade = (
@@ -1210,7 +1467,13 @@ export default function App() {
     setDraftPicks(nextPicks);
     setTransactions(nextTx);
     showToast(`Trade completed with ${teamMap[partnerTeamId]?.city} ${teamMap[partnerTeamId]?.name}.`, 'success');
-    void persistToCloud({ players: nextPlayers, draftPicks: nextPicks, transactions: nextTx });
+    void persistToCloud({
+      includePlayers: userPlayerIds.length > 0 || aiPlayerIds.length > 0,
+      includeScheduleAndDraft: userPickIds.length > 0 || aiPickIds.length > 0,
+      players: nextPlayers,
+      draftPicks: nextPicks,
+      transactions: nextTx,
+    });
     return true;
   };
 
@@ -1249,13 +1512,16 @@ export default function App() {
       seasonHistory: existing?.seasonHistory || [],
     };
 
-    if (authUser && activeFranchiseId) {
-      await upsertSavedPlayerCard(cardData, !existing);
-    } else {
-      setSavedCards((prev) => {
-        const filtered = prev.filter((c) => c.id !== cardId);
-        return [{ ...cardData }, ...filtered];
-      });
+    const nextCards = [{ ...cardData }, ...savedCards.filter((c) => c.id !== cardId)];
+    setSavedCards(nextCards);
+    void persistToCloud({ skipCloud: true, savedCards: nextCards });
+
+    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
+      try {
+        await upsertSavedPlayerCard(cardData, !existing);
+      } catch (err) {
+        handleCloudWriteError(err);
+      }
     }
     showToast(`Saved ${player.name} to Player Card Vault.`, 'success');
   };
@@ -1353,30 +1619,62 @@ export default function App() {
       seasonHistory: [],
     };
 
-    if (authUser && activeFranchiseId) {
-      await upsertSavedPlayerCard(cardPayload, true);
-      if (params.targetDestination !== 'VAULT_ONLY') {
-        await persistToCloud({ players: nextPlayers, transactions: nextTx });
+    const nextCards = [{ ...cardPayload }, ...savedCards];
+    setSavedCards(nextCards);
+
+    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
+      try {
+        await upsertSavedPlayerCard(cardPayload, true);
+        if (params.targetDestination !== 'VAULT_ONLY') {
+          await persistToCloud({
+            includePlayers: true,
+            includeScheduleAndDraft: false,
+            players: nextPlayers,
+            transactions: nextTx,
+            savedCards: nextCards,
+          });
+        } else {
+          void persistToCloud({ skipCloud: true, savedCards: nextCards });
+        }
+      } catch (err) {
+        handleCloudWriteError(err);
       }
     } else {
-      setSavedCards((prev) => [{ ...cardPayload }, ...prev]);
+      void persistToCloud({
+        skipCloud: true,
+        players: nextPlayers,
+        transactions: nextTx,
+        savedCards: nextCards,
+      });
     }
     showToast(`Created ${params.name} (${ovr} OVR) player card.`, 'success');
   };
 
   const handleUpdateCardTheme = async (card: SavedPlayerCard, theme: CardTheme) => {
-    if (authUser && activeFranchiseId) {
-      await upsertSavedPlayerCard({ ...card, cardTheme: theme }, false);
-    } else {
-      setSavedCards((prev) => prev.map((c) => (c.id === card.id ? { ...c, cardTheme: theme } : c)));
+    const nextCards = savedCards.map((c) => (c.id === card.id ? { ...c, cardTheme: theme } : c));
+    setSavedCards(nextCards);
+    void persistToCloud({ skipCloud: true, savedCards: nextCards });
+
+    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
+      try {
+        await upsertSavedPlayerCard({ ...card, cardTheme: theme }, false);
+      } catch (err) {
+        handleCloudWriteError(err);
+      }
     }
   };
 
   const handleDeleteCard = async (cardId: string) => {
-    if (authUser && activeFranchiseId) {
-      await deleteSavedPlayerCard(activeFranchiseId, cardId);
-    } else {
-      setSavedCards((prev) => prev.filter((c) => c.id !== cardId));
+    const nextCards = savedCards.filter((c) => c.id !== cardId);
+    setSavedCards(nextCards);
+    void persistToCloud({ skipCloud: true, savedCards: nextCards });
+
+    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
+      try {
+        await deleteSavedPlayerCard(activeFranchiseId, cardId);
+      } catch (err) {
+        handleCloudWriteError(err);
+      }
     }
     showToast('Removed player card from vault.', 'info');
   };
@@ -1437,6 +1735,40 @@ export default function App() {
             </div>
           </header>
 
+          {syncState === 'quota' && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-xs sm:text-sm text-amber-100 space-y-1">
+                  <div className="font-semibold">
+                    Daily Firestore Free Write Quota Reached — Local Auto-Save Active
+                  </div>
+                  <p className="text-amber-200/80 text-xs">
+                    Your free daily database write units reset tomorrow. You can keep playing seamlessly via local browser saves, or upgrade your Spark plan database under the Enterprise Edition section.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={FIRESTORE_PRICING_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 whitespace-nowrap"
+                >
+                  Spark Pricing <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <a
+                  href={FIRESTORE_QUOTA_UPGRADE_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold whitespace-nowrap"
+                >
+                  Upgrade Database <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              </div>
+            </div>
+          )}
+
           {/* Saved Firebase Dynasties */}
           {authUser && cloudFranchises.length > 0 && (
             <section className="space-y-3">
@@ -1483,6 +1815,57 @@ export default function App() {
                     </div>
                   );
                 })}
+              </div>
+            </section>
+          )}
+
+          {/* Local Auto-Saved Dynasties */}
+          {localBackups.filter((lb) => !cloudFranchises.some((cf) => cf.id === lb.franchiseId)).length > 0 && (
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="font-display text-lg font-bold text-white flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-emerald-400" />
+                  Local Auto-Saved Dynasties
+                </h2>
+                <span className="text-xs text-slate-400">Stored in this browser</span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {localBackups
+                  .filter((lb) => !cloudFranchises.some((cf) => cf.id === lb.franchiseId))
+                  .map((lb) => {
+                    const cfg = TEAM_CONFIGS.find((t) => t.id === lb.userTeamId);
+                    return (
+                      <div
+                        key={lb.franchiseId}
+                        className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between gap-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <TeamBadge team={cfg} size="lg" />
+                            <div className="min-w-0">
+                              <div className="font-bold text-white text-sm truncate">{lb.name}</div>
+                              <div className="text-xs text-slate-400 font-mono mt-0.5">
+                                {lb.year} · Day {lb.currentDay}/162 · {lb.wins}-{lb.losses}
+                              </div>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleDeleteLocalBackup(lb.franchiseId)}
+                            aria-label={`Delete local ${lb.name}`}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <button
+                          onClick={() => resumeLocalBackup(lb.franchiseId)}
+                          className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition cursor-pointer"
+                        >
+                          Resume Local Auto-Save
+                        </button>
+                      </div>
+                    );
+                  })}
               </div>
             </section>
           )}
@@ -1547,6 +1930,12 @@ export default function App() {
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: Activity, disabled: isDraftPhase },
+    {
+      id: 'live',
+      label: 'Live Ballpark',
+      icon: Tv,
+      disabled: phase !== 'REGULAR_SEASON' || currentDay >= 162 || !todayUserMatchup,
+    },
     { id: 'trends', label: 'Trends', icon: TrendingUp, disabled: isDraftPhase },
     { id: 'cards', label: `Player Cards (${savedCards.length})`, icon: IdCard, disabled: false },
     { id: 'roster', label: `Roster (${userRoster.length}/30)`, icon: Users, disabled: false },
@@ -1646,13 +2035,27 @@ export default function App() {
 
             {authUser ? (
               <button
-                onClick={() => void persistToCloud()}
+                onClick={() =>
+                  syncState === 'quota'
+                    ? void handleRetryCloudSync()
+                    : void persistToCloud({ includePlayers: true, includeScheduleAndDraft: isDraftPhase })
+                }
                 disabled={syncState === 'saving'}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 transition cursor-pointer whitespace-nowrap"
-                title="Save Franchise State to Firebase"
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+                  syncState === 'quota'
+                    ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
+                    : 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-200'
+                }`}
+                title="Save Franchise State"
               >
                 <Save className="w-3.5 h-3.5 text-sky-400" />
-                {syncState === 'saving' ? 'Saving...' : syncState === 'synced' ? 'Synced' : 'Save'}
+                {syncState === 'saving'
+                  ? 'Saving...'
+                  : syncState === 'quota'
+                  ? 'Local Save (Retry Sync)'
+                  : syncState === 'synced'
+                  ? 'Synced'
+                  : 'Save'}
               </button>
             ) : (
               <button
@@ -1709,10 +2112,48 @@ export default function App() {
         </div>
       )}
 
+      {/* Quota Exceeded Non-Blocking Notice */}
+      {syncState === 'quota' && (
+        <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2">
+          <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-amber-200">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                Free daily Firestore write quota reached (resets tomorrow). Changes auto-save locally so your dynasty continues uninterrupted.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <a
+                href={FIRESTORE_PRICING_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200 whitespace-nowrap"
+              >
+                Spark Pricing <ExternalLink className="w-3 h-3" />
+              </a>
+              <a
+                href={FIRESTORE_QUOTA_UPGRADE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold whitespace-nowrap"
+              >
+                Upgrade <ExternalLink className="w-3 h-3" />
+              </a>
+              <button
+                onClick={() => void handleRetryCloudSync()}
+                className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white font-medium cursor-pointer whitespace-nowrap"
+              >
+                Retry Sync
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast Notification */}
       {toastMsg && (
         <div className="fixed bottom-5 right-5 z-50 max-w-md bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
-          <AlertCircle
+          <AlertTriangle
             className={`w-5 h-5 shrink-0 ${
               toastMsg.type === 'error'
                 ? 'text-rose-400'
@@ -1745,6 +2186,27 @@ export default function App() {
             onAdvanceOffseason={advanceToOffseasonRookieDraft}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
             onNavigate={setActiveTab}
+            onPlayLiveGame={todayUserMatchup ? () => setActiveTab('live') : undefined}
+            nextMatchupLabel={
+              todayUserMatchup
+                ? `Play Live · ${todayUserMatchup.awayTeam.id} @ ${todayUserMatchup.homeTeam.id}`
+                : undefined
+            }
+          />
+        )}
+
+        {activeTab === 'live' && phase === 'REGULAR_SEASON' && todayUserMatchup && (
+          <LiveGameCanvas
+            key={`live-${year}-d${currentDay}-${todayUserMatchup.homeTeam.id}`}
+            year={year}
+            currentDay={currentDay}
+            homeTeam={todayUserMatchup.homeTeam}
+            awayTeam={todayUserMatchup.awayTeam}
+            userTeamId={userTeamId}
+            homeRoster={playersByTeam.byTeam[todayUserMatchup.homeTeam.id] || []}
+            awayRoster={playersByTeam.byTeam[todayUserMatchup.awayTeam.id] || []}
+            onCompleteGame={commitLiveGameResult}
+            onExit={() => setActiveTab('dashboard')}
           />
         )}
 

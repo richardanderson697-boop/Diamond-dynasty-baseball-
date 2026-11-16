@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Calendar, Star, TrendingUp, Trophy } from 'lucide-react';
 import {
   DraftPick,
@@ -12,7 +12,9 @@ import {
   TransactionEntry,
 } from '../types/baseball';
 import { getHitterSlash, getPitcherRatios } from '../engine/baseballEngine';
+import { getStadiumByTeamId } from '../data/stadiums';
 import { RatingBadge, TeamBadge } from './SharedBadges';
+import { StadiumPreviewCard } from './StadiumPreviewCard';
 
 interface DashboardViewProps {
   year: number;
@@ -31,6 +33,8 @@ interface DashboardViewProps {
   onAdvanceOffseason: () => void;
   onSelectPlayer: (p: Player) => void;
   onNavigate: (tab: string) => void;
+  onPlayLiveGame?: () => void;
+  nextMatchupLabel?: string;
 }
 
 export function DashboardView({
@@ -50,7 +54,13 @@ export function DashboardView({
   onAdvanceOffseason,
   onSelectPlayer,
   onNavigate,
+  onPlayLiveGame,
+  nextMatchupLabel,
 }: DashboardViewProps) {
+  const [scoutStadiumTeamId, setScoutStadiumTeamId] = useState<string | null>(null);
+  const activeStadiumTeamId = scoutStadiumTeamId || userTeam?.id || 'NYY';
+  const activeStadium = getStadiumByTeamId(activeStadiumTeamId);
+  const activeStadiumTeam = teamMap[activeStadiumTeamId] || userTeam;
   const hitters = userRoster.filter((p) => !p.isPitcher);
   const pitchers = userRoster.filter((p) => p.isPitcher);
   const avgHitterOvr = hitters.length
@@ -392,6 +402,18 @@ export function DashboardView({
           </div>
         </div>
       </div>
+
+      {/* Ballpark Geometry, Turf & Park Factors */}
+      <StadiumPreviewCard
+        stadium={activeStadium}
+        team={activeStadiumTeam}
+        allTeams={teams}
+        selectedTeamId={activeStadiumTeamId}
+        onSelectTeamId={setScoutStadiumTeamId}
+        onPlayLiveGame={onPlayLiveGame}
+        canPlayLiveGame={phase === 'REGULAR_SEASON' && currentDay < 162}
+        nextOpponentText={nextMatchupLabel}
+      />
     </div>
   );
 }

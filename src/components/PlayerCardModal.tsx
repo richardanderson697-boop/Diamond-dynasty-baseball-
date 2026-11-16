@@ -3,6 +3,7 @@ import { Bookmark, Check, X } from 'lucide-react';
 import { CardTheme, Player, SavedPlayerCard, Team } from '../types/baseball';
 import { formatIP, getHitterSlash, getPitcherRatios } from '../engine/baseballEngine';
 import { AttributeRadarSvg, getCardThemeClasses, RatingBadge, TeamBadge } from './SharedBadges';
+import { PlayerAvatarSvg } from './PlayerAvatarSvg';
 
 interface PlayerCardModalProps {
   player: Player;
@@ -52,9 +53,10 @@ export function PlayerCardModal({
         {/* Header */}
         <div className={`px-6 py-4 flex items-start justify-between gap-4 ${themeStyle.headerBg}`}>
           <div className="flex items-center gap-3.5 min-w-0">
-            <TeamBadge team={team} size="lg" />
+            <PlayerAvatarSvg player={player} team={team} theme={theme} size={68} />
             <div className="min-w-0">
               <div className="flex items-center gap-2.5 flex-wrap">
+                <TeamBadge team={team} size="sm" />
                 <h3 className="font-display text-2xl font-extrabold tracking-tight text-white truncate">
                   {player.name}
                 </h3>
