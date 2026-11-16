@@ -1,0 +1,293 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL HARDENED PRIMITIVES
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isFranchiseOwner(franchiseId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/franchises/$(franchiseId))
+        && get(/databases/$(database)/documents/franchises/$(franchiseId)).data.ownerId == request.auth.uid;
+    }
+
+    function isFranchiseOwnerAfter(franchiseId) {
+      return isSignedIn()
+        && existsAfter(/databases/$(database)/documents/franchises/$(franchiseId))
+        && getAfter(/databases/$(database)/documents/franchises/$(franchiseId)).data.ownerId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS
+    // =========================================================================
+    function isValidFranchise(data) {
+      return data.keys().hasAll([
+          'ownerId', 'name', 'userTeamId', 'year', 'phase',
+          'currentDay', 'currentPickIdx', 'teams',
+          'championsHistory', 'transactions', 'recentGames',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'name', 'userTeamId', 'year', 'phase',
+          'currentDay', 'currentPickIdx', 'teams',
+          'championsHistory', 'transactions', 'recentGames',
+          'playoffResults', 'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.userTeamId is string && data.userTeamId.size() >= 2 && data.userTeamId.size() <= 10 && data.userTeamId.matches('^[A-Z0-9]+$')
+        && data.year is int && data.year >= 2020 && data.year <= 2200
+        && data.phase in ['SETUP', 'INAUGURAL_DRAFT', 'REGULAR_SEASON', 'PLAYOFFS_COMPLETE', 'ROOKIE_DRAFT', 'ROSTER_CUTS']
+        && data.currentDay is int && data.currentDay >= 0 && data.currentDay <= 162
+        && data.currentPickIdx is int && data.currentPickIdx >= 0 && data.currentPickIdx <= 1000
+        && data.teams is list && data.teams.size() <= 32 && (data.teams.size() == 0 || data.teams[0] is map)
+        && data.championsHistory is list && data.championsHistory.size() <= 100 && (data.championsHistory.size() == 0 || data.championsHistory[0] is map)
+        && data.transactions is list && data.transactions.size() <= 150 && (data.transactions.size() == 0 || data.transactions[0] is map)
+        && data.recentGames is list && data.recentGames.size() <= 50 && (data.recentGames.size() == 0 || data.recentGames[0] is map)
+        && (!('playoffResults' in data) || data.playoffResults == null || data.playoffResults is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStateChunk(data, franchiseId) {
+      return data.keys().hasAll(['ownerId', 'franchiseId', 'chunkType', 'items', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'franchiseId', 'chunkType', 'items', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'])
+        && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
+        && data.franchiseId is string && data.franchiseId == franchiseId && isValidId(data.franchiseId)
+        && data.chunkType in ['PLAYERS', 'DRAFT_AND_SCHEDULE']
+        && data.items is list && data.items.size() <= 500 && (data.items.size() == 0 || data.items[0] is map)
+        && (!('draftPicks' in data) || (data.draftPicks is list && data.draftPicks.size() <= 500 && (data.draftPicks.size() == 0 || data.draftPicks[0] is map)))
+        && (!('draftOrder' in data) || (data.draftOrder is list && data.draftOrder.size() <= 1000 && (data.draftOrder.size() == 0 || data.draftOrder[0] is map)))
+        && (!('draftHistory' in data) || (data.draftHistory is list && data.draftHistory.size() <= 1000 && (data.draftHistory.size() == 0 || data.draftHistory[0] is map)))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedPlayerCard(data, franchiseId) {
+      return data.keys().hasAll([
+          'ownerId', 'franchiseId', 'playerId', 'name', 'age',
+          'bats', 'throws', 'isPitcher', 'position', 'teamId',
+          'ovr', 'potential', 'cardTheme', 'notes', 'isCustom',
+          'seasonStats', 'careerStats', 'seasonHistory',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'franchiseId', 'playerId', 'name', 'age',
+          'bats', 'throws', 'isPitcher', 'position', 'teamId',
+          'ovr', 'potential', 'power', 'speed', 'glove',
+          'velocity', 'control', 'finesse',
+          'cardTheme', 'notes', 'isCustom',
+          'seasonStats', 'careerStats', 'seasonHistory',
+          'createdAt', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
+        && data.franchiseId is string && data.franchiseId == franchiseId && isValidId(data.franchiseId)
+        && data.playerId is string && data.playerId.size() >= 1 && data.playerId.size() <= 64
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 64
+        && data.age is int && data.age >= 16 && data.age <= 55
+        && data.bats in ['L', 'R', 'S']
+        && data.throws in ['L', 'R']
+        && data.isPitcher is bool
+        && data.position in ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'DH', 'SP', 'RP']
+        && data.teamId is string && data.teamId.size() >= 1 && data.teamId.size() <= 10
+        && data.ovr is int && data.ovr >= 20 && data.ovr <= 99
+        && data.potential is int && data.potential >= 20 && data.potential <= 99
+        && (!('power' in data) || (data.power is int && data.power >= 20 && data.power <= 99))
+        && (!('speed' in data) || (data.speed is int && data.speed >= 20 && data.speed <= 99))
+        && (!('glove' in data) || (data.glove is int && data.glove >= 20 && data.glove <= 99))
+        && (!('velocity' in data) || (data.velocity is int && data.velocity >= 20 && data.velocity <= 99))
+        && (!('control' in data) || (data.control is int && data.control >= 20 && data.control <= 99))
+        && (!('finesse' in data) || (data.finesse is int && data.finesse >= 20 && data.finesse <= 99))
+        && data.cardTheme in ['CHROME', 'GOLD', 'EMERALD', 'OBSIDIAN']
+        && data.notes is string && data.notes.size() <= 300
+        && data.isCustom is bool
+        && data.seasonStats is map
+        && data.careerStats is map
+        && data.seasonHistory is list && data.seasonHistory.size() <= 30 && (data.seasonHistory.size() == 0 || data.seasonHistory[0] is map)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSeasonSnapshot(data, franchiseId) {
+      return data.keys().hasAll([
+          'ownerId', 'franchiseId', 'year', 'day', 'isSeasonEnd',
+          'userTeamId', 'userWins', 'userLosses', 'userWinPct', 'userRunDiff',
+          'divisionLeaderWinPct', 'divisionRank', 'leagueRank',
+          'divisionSnapshots', 'topHrLeader', 'topEraLeader', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'franchiseId', 'year', 'day', 'isSeasonEnd',
+          'userTeamId', 'userWins', 'userLosses', 'userWinPct', 'userRunDiff',
+          'divisionLeaderWinPct', 'divisionRank', 'leagueRank',
+          'divisionSnapshots', 'topHrLeader', 'topEraLeader', 'championTeamId', 'createdAt'
+        ])
+        && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
+        && data.franchiseId is string && data.franchiseId == franchiseId && isValidId(data.franchiseId)
+        && data.year is int && data.year >= 2020 && data.year <= 2200
+        && data.day is int && data.day >= 0 && data.day <= 162
+        && data.isSeasonEnd is bool
+        && data.userTeamId is string && data.userTeamId.size() >= 2 && data.userTeamId.size() <= 10
+        && data.userWins is int && data.userWins >= 0 && data.userWins <= 162
+        && data.userLosses is int && data.userLosses >= 0 && data.userLosses <= 162
+        && data.userWinPct is number && data.userWinPct >= 0.0 && data.userWinPct <= 1.0
+        && data.userRunDiff is int && data.userRunDiff >= -1000 && data.userRunDiff <= 1000
+        && data.divisionLeaderWinPct is number && data.divisionLeaderWinPct >= 0.0 && data.divisionLeaderWinPct <= 1.0
+        && data.divisionRank is int && data.divisionRank >= 1 && data.divisionRank <= 6
+        && data.leagueRank is int && data.leagueRank >= 1 && data.leagueRank <= 16
+        && data.divisionSnapshots is list && data.divisionSnapshots.size() <= 6 && (data.divisionSnapshots.size() == 0 || data.divisionSnapshots[0] is map)
+        && data.topHrLeader is string && data.topHrLeader.size() <= 100
+        && data.topEraLeader is string && data.topEraLeader.size() <= 100
+        && (!('championTeamId' in data) || (data.championTeamId is string && data.championTeamId.size() <= 10))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLeagueRecord(data, franchiseId) {
+      return data.keys().hasAll([
+          'ownerId', 'franchiseId', 'recordKey', 'scope', 'scopeLabel',
+          'category', 'title', 'holderName', 'teamId', 'value',
+          'displayValue', 'year', 'day', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId', 'franchiseId', 'recordKey', 'scope', 'scopeLabel',
+          'category', 'title', 'holderName', 'teamId', 'value',
+          'displayValue', 'year', 'day', 'updatedAt'
+        ])
+        && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
+        && data.franchiseId is string && data.franchiseId == franchiseId && isValidId(data.franchiseId)
+        && data.recordKey is string && data.recordKey.size() >= 1 && data.recordKey.size() <= 64 && isValidId(data.recordKey)
+        && data.scope in ['LEAGUE', 'AL', 'NL', 'DIVISION']
+        && data.scopeLabel is string && data.scopeLabel.size() <= 40
+        && data.category in ['TEAM', 'BATTING', 'PITCHING']
+        && data.title is string && data.title.size() <= 64
+        && data.holderName is string && data.holderName.size() <= 64
+        && data.teamId is string && data.teamId.size() <= 10
+        && data.value is number
+        && data.displayValue is string && data.displayValue.size() <= 32
+        && data.year is int && data.year >= 2020 && data.year <= 2200
+        && data.day is int && data.day >= 0 && data.day <= 162
+        && data.updatedAt is timestamp;
+    }
+
+    // =========================================================================
+    // COLLECTION RULES
+    // =========================================================================
+    match /franchises/{franchiseId} {
+      allow get: if isValidId(franchiseId) && isSignedIn() && existing().ownerId == request.auth.uid;
+      allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+      allow create: if isValidId(franchiseId) && isVerified() && isValidFranchise(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(franchiseId) && isVerified() && isValidFranchise(incoming())
+        && existing().ownerId == request.auth.uid
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'name', 'userTeamId', 'year', 'phase', 'currentDay', 'currentPickIdx',
+          'teams', 'championsHistory', 'transactions', 'recentGames',
+          'playoffResults', 'updatedAt'
+        ]);
+      allow delete: if isValidId(franchiseId) && isVerified() && existing().ownerId == request.auth.uid;
+
+      // Partitioned Players, Draft State, and Schedule Chunks
+      match /stateChunks/{chunkId} {
+        allow get: if isValidId(franchiseId) && isValidId(chunkId) && isFranchiseOwner(franchiseId);
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(franchiseId) && isValidId(chunkId) && isVerified()
+          && isValidStateChunk(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(franchiseId) && isValidId(chunkId) && isVerified()
+          && isValidStateChunk(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().franchiseId == existing().franchiseId
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'chunkType', 'items', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'
+          ]);
+        allow delete: if isValidId(franchiseId) && isValidId(chunkId) && isVerified() && isFranchiseOwner(franchiseId);
+      }
+
+      // Saved & Custom Player Cards
+      match /savedPlayers/{cardId} {
+        allow get: if isValidId(franchiseId) && isValidId(cardId) && isFranchiseOwner(franchiseId);
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(franchiseId) && isValidId(cardId) && isVerified()
+          && isValidSavedPlayerCard(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(franchiseId) && isValidId(cardId) && isVerified()
+          && isValidSavedPlayerCard(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().franchiseId == existing().franchiseId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'age', 'bats', 'throws', 'isPitcher', 'position', 'teamId',
+            'ovr', 'potential', 'power', 'speed', 'glove', 'velocity', 'control', 'finesse',
+            'cardTheme', 'notes', 'seasonStats', 'careerStats', 'seasonHistory', 'updatedAt'
+          ]);
+        allow delete: if isValidId(franchiseId) && isValidId(cardId) && isVerified() && isFranchiseOwner(franchiseId);
+      }
+
+      // Historical Performance Trend Checkpoints
+      match /seasonSnapshots/{snapshotId} {
+        allow get: if isValidId(franchiseId) && isValidId(snapshotId) && isFranchiseOwner(franchiseId);
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(franchiseId) && isValidId(snapshotId) && isVerified()
+          && isValidSeasonSnapshot(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if isValidId(franchiseId) && isValidId(snapshotId) && isVerified() && isFranchiseOwner(franchiseId);
+      }
+
+      // Division & League Record Book
+      match /records/{recordId} {
+        allow get: if isValidId(franchiseId) && isValidId(recordId) && isFranchiseOwner(franchiseId);
+        allow list: if isSignedIn() && existing().ownerId == request.auth.uid;
+        allow create: if isValidId(franchiseId) && isValidId(recordId) && isVerified()
+          && isValidLeagueRecord(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().updatedAt == request.time;
+        allow update: if isValidId(franchiseId) && isValidId(recordId) && isVerified()
+          && isValidLeagueRecord(incoming(), franchiseId)
+          && isFranchiseOwnerAfter(franchiseId)
+          && incoming().ownerId == existing().ownerId
+          && incoming().franchiseId == existing().franchiseId
+          && incoming().recordKey == existing().recordKey
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'holderName', 'teamId', 'value', 'displayValue', 'year', 'day', 'updatedAt'
+          ]);
+        allow delete: if isValidId(franchiseId) && isValidId(recordId) && isVerified() && isFranchiseOwner(franchiseId);
+      }
+    }
+  }
+}

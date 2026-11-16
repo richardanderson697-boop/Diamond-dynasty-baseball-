@@ -1,0 +1,3419 @@
+```react
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import {
+  Trophy, Users, ArrowLeftRight, UserPlus, Play, FastForward, SkipForward,
+  Shield, Award, Calendar, BarChart3, Search, Filter, ChevronUp, ChevronDown,
+  Check, X, AlertCircle, RefreshCw, Briefcase, Activity, Flame, Star, ListOrdered,
+  FileText, Sparkles, SlidersHorizontal, ArrowUpDown, Clock, Building2
+} from 'lucide-react';
+
+// ============================================================================
+// 1. CONSTANTS & PROCEDURAL DATA GENERATORS
+// ============================================================================
+
+const FIRST_NAMES = [
+  "Marcus", "Jalen", "Bryce", "Shohei", "Mookie", "Freddie", "Gerrit", "Corbin",
+  "Gunnar", "Bobby", "Elly", "Julio", "Ronald", "Juan", "Aaron", "Trea", "Corey",
+  "Zack", "Logan", "Tarik", "Paul", "Spencer", "Dylan", "Cole", "Max", "Austin",
+  "Matt", "Pete", "Rafael", "Bo", "Vladimir", "Kyle", "Yordan", "Jose", "Manny",
+  "Fernando", "Ketel", "Christian", "William", "Adley", "Cal", "Will", "Salvador",
+  "J.T.", "Gabriel", "Francisco", "Dansby", "Willy", "Oneil", "CJ", "Jackson",
+  "Wyatt", "Dylan", "Paul", "Junior", "Marcelo", "Roman", "Ethan", "Walker",
+  "Chase", "Hagen", "Charlie", "Travis", "Jac", "Nick", "Braden", "Cam", "Colt",
+  "Mason", "Emmanuel", "Devin", "Josh", "Edwin", "Raisel", "Kenley", "Camilo",
+  "Andres", "Ryan", "Felix", "Clay", "Tanner", "Kirby", "Lucas", "Hunter", "Garrett",
+  "Shota", "Yoshinobu", "Kodai", "Roki", "Yu", "Luis", "Framber", "Cristian",
+  "Pablo", "Sandy", "Eury", "Jesus", "Brayan", "Nolan", "Bo", "Alex", "Isaac",
+  "Royce", "Byron", "Carlos", "George", "Teoscar", "Lourdes", "Anthony", "Jazz"
+];
+
+const LAST_NAMES = [
+  "Trout", "Judge", "Betts", "Ohtani", "Freeman", "Harper", "Soto", "Acuna",
+  "Witt", "Henderson", "De La Cruz", "Rodriguez", "Carroll", "Tucker", "Alvarez",
+  "Ramirez", "Machado", "Tatis", "Lindor", "Seager", "Semien", "Olson", "Riley",
+  "Alonso", "Devers", "Guerrero", "Bichette", "Rutschman", "Smith", "Contreras",
+  "Raleigh", "Perez", "Cole", "Burnes", "Wheeler", "Skubal", "Skenes", "Webb",
+  "Strider", "Cease", "Ragans", "Fried", "Snell", "Glasnow", "Yamamoto", "Imanaga",
+  "Castillo", "Valdez", "Lopez", "Alcantara", "Gallen", "Nola", "Verlander", "Scherzer",
+  "Kershaw", "Sale", "Clase", "Hader", "Diaz", "Williams", "Helsley", "Munoz",
+  "Bautista", "Miller", "Duran", "Chapman", "Arenado", "Goldschmidt", "Bregman",
+  "Correa", "Buxton", "Springer", "Hernandez", "Santander", "Ozuna", "Schwarber",
+  "Realmuto", "Turner", "Swanson", "Adames", "Cruz", "Abrams", "Merrill", "Chourio",
+  "Langford", "Crews", "Holliday", "Caminero", "Mayer", "Anthony", "Bazzana",
+  "Condons", "Caglianone", "Kurtz", "Burns", "Smith", "Montgomery", "Rooker", "Bleday"
+];
+
+const TEAM_CONFIGS = [
+  // American League (16 teams: 6 East, 5 Central, 5 West)
+  { id: "NYY", city: "New York", name: "Empires", league: "AL", division: "East", color: "#1E3A8A", accent: "#E2E8F0" },
+  { id: "BOS", city: "Boston", name: "Pilgrims", league: "AL", division: "East", color: "#991B1B", accent: "#F8FAFC" },
+  { id: "TOR", city: "Toronto", name: "Falcons", league: "AL", division: "East", color: "#1D4ED8", accent: "#38BDF8" },
+  { id: "BAL", city: "Baltimore", name: "Clippers", league: "AL", division: "East", color: "#C2410C", accent: "#FDBA74" },
+  { id: "TBR", city: "Tampa Bay", name: "Stingrays", league: "AL", division: "East", color: "#0F766E", accent: "#5EEAD4" },
+  { id: "MTL", city: "Montreal", name: "Royals", league: "AL", division: "East", color: "#0369A1", accent: "#F43F5E" },
+
+  { id: "CLE", city: "Cleveland", name: "Spiders", league: "AL", division: "Central", color: "#B91C1C", accent: "#1E293B" },
+  { id: "MIN", city: "Minnesota", name: "North Stars", league: "AL", division: "Central", color: "#1E40AF", accent: "#DC2626" },
+  { id: "KCR", city: "Kansas City", name: "Monarchs", league: "AL", division: "Central", color: "#1D4ED8", accent: "#FACC15" },
+  { id: "DET", city: "Detroit", name: "Motors", league: "AL", division: "Central", color: "#1E293B", accent: "#EA580C" },
+  { id: "CHW", city: "Chicago", name: "Sox", league: "AL", division: "Central", color: "#18181B", accent: "#D4D4D8" },
+
+  { id: "HOU", city: "Houston", name: " Apollos", league: "AL", division: "West", color: "#C2410C", accent: "#1E3A8A" },
+  { id: "SEA", city: "Seattle", name: "Cascades", league: "AL", division: "West", color: "#0F766E", accent: "#38BDF8" },
+  { id: "TEX", city: "Texas", name: "Marshals", league: "AL", division: "West", color: "#1D4ED8", accent: "#DC2626" },
+  { id: "LAA", city: "Anaheim", name: "Halos", league: "AL", division: "West", color: "#B91C1C", accent: "#FDE047" },
+  { id: "OAK", city: "Las Vegas", name: "Aces", league: "AL", division: "West", color: "#15803D", accent: "#FACC15" },
+
+  // National League (16 teams: 6 East, 5 Central, 5 West)
+  { id: "ATL", city: "Atlanta", name: "Hammers", league: "NL", division: "East", color: "#991B1B", accent: "#1E3A8A" },
+  { id: "PHI", city: "Philadelphia", name: "Founders", league: "NL", division: "East", color: "#B91C1C", accent: "#60A5FA" },
+  { id: "NYM", city: "Queens", name: "Metros", league: "NL", division: "East", color: "#1D4ED8", accent: "#EA580C" },
+  { id: "MIA", city: "Miami", name: "Sharks", league: "NL", division: "East", color: "#0284C7", accent: "#F43F5E" },
+  { id: "WSN", city: "Washington", name: "Senators", league: "NL", division: "East", color: "#991B1B", accent: "#E2E8F0" },
+  { id: "CHA", city: "Charlotte", name: "Flight", league: "NL", division: "East", color: "#4338CA", accent: "#2DD4BF" },
+
+  { id: "MIL", city: "Milwaukee", name: "Barons", league: "NL", division: "Central", color: "#1E3A8A", accent: "#EAB308" },
+  { id: "CHC", city: "Chicago", name: "Bruins", league: "NL", division: "Central", color: "#1D4ED8", accent: "#EF4444" },
+  { id: "STL", city: "St. Louis", name: "Archers", league: "NL", division: "Central", color: "#B91C1C", accent: "#FACC15" },
+  { id: "CIN", city: "Cincinnati", name: "Steamers", league: "NL", division: "Central", color: "#DC2626", accent: "#F8FAFC" },
+  { id: "PIT", city: "Pittsburgh", name: "Forgers", league: "NL", division: "Central", color: "#18181B", accent: "#EAB308" },
+
+  { id: "LAD", city: "Los Angeles", name: "Knights", league: "NL", division: "West", color: "#1D4ED8", accent: "#F8FAFC" },
+  { id: "SDP", city: "San Diego", name: "Surf", league: "NL", division: "West", color: "#78350F", accent: "#FACC15" },
+  { id: "ARI", city: "Arizona", name: "Vipers", league: "NL", division: "West", color: "#9F1239", accent: "#14B8A6" },
+  { id: "SFG", city: "San Francisco", name: "Baymen", league: "NL", division: "West", color: "#C2410C", accent: "#18181B" },
+  { id: "COL", city: "Colorado", name: "Peaks", league: "NL", division: "West", color: "#581C87", accent: "#CBD5E1" },
+];
+
+const HITTER_POSITIONS = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"];
+const PITCHER_POSITIONS = ["SP", "RP"];
+
+const clamp = (val, min, max) => Math.max(min, Math.min(max, Math.round(val)));
+
+function randGaussian(mean, stdDev) {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  const num = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+  return num * stdDev + mean;
+}
+
+function calculateOverall(player) {
+  if (player.isPitcher) {
+    // Velocity, Control, Finesse
+    const raw = player.velocity * 0.36 + player.control * 0.34 + player.finesse * 0.30;
+    return clamp(raw, 20, 99);
+  } else {
+    // Power, Speed, Glove (weighted by position)
+    const pos = player.position;
+    let wPow = 0.40, wSpd = 0.30, wGlv = 0.30;
+    if (pos === "DH" || pos === "1B") { wPow = 0.55; wSpd = 0.20; wGlv = 0.25; }
+    else if (pos === "C" || pos === "SS" || pos === "CF") { wPow = 0.32; wSpd = 0.30; wGlv = 0.38; }
+    const raw = player.power * wPow + player.speed * wSpd + player.glove * wGlv;
+    return clamp(raw, 20, 99);
+  }
+}
+
+function createEmptySeasonStats(isPitcher) {
+  if (isPitcher) {
+    return { g: 0, gs: 0, w: 0, l: 0, sv: 0, ipOuts: 0, h: 0, er: 0, bb: 0, so: 0 };
+  }
+  return { g: 0, ab: 0, r: 0, h: 0, doubles: 0, triples: 0, hr: 0, rbi: 0, bb: 0, so: 0, sb: 0 };
+}
+
+let globalPlayerCounter = 1;
+
+function generatePlayer({ isRookie = false, forcedPitcher = null, forcedPos = null, talentTier = null } = {}) {
+  const id = `PLR-${globalPlayerCounter++}-${Math.random().toString(36).substring(2, 6)}`;
+  const firstName = FIRST_NAMES[Math.floor(Math.random() * FIRST_NAMES.length)];
+  const lastName = LAST_NAMES[Math.floor(Math.random() * LAST_NAMES.length)];
+
+  const isPitcher = forcedPitcher !== null ? forcedPitcher : Math.random() < 0.45; // ~45% pitchers (13-14 per 30-man)
+  let position = forcedPos;
+  if (!position) {
+    if (isPitcher) {
+      position = Math.random() < 0.45 ? "SP" : "RP";
+    } else {
+      const weights = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH"];
+      position = weights[Math.floor(Math.random() * weights.length)];
+    }
+  }
+
+  const age = isRookie
+    ? clamp(Math.floor(18 + Math.random() * 5), 18, 22)
+    : clamp(Math.round(randGaussian(27.5, 4.3)), 18, 38);
+
+  const throws = Math.random() < 0.28 ? "L" : "R";
+  let bats = "R";
+  if (isPitcher) {
+    bats = throws;
+  } else {
+    const r = Math.random();
+    if (r < 0.32) bats = "L";
+    else if (r < 0.42) bats = "S";
+    else bats = "R";
+  }
+
+  // Talent baseline
+  let baseSkill;
+  if (talentTier === "generational") baseSkill = randGaussian(78, 5);
+  else if (talentTier === "high") baseSkill = randGaussian(68, 6);
+  else if (talentTier === "mid") baseSkill = randGaussian(56, 7);
+  else if (talentTier === "low") baseSkill = randGaussian(44, 7);
+  else {
+    // Inaugural pool: wide spread from 35 to 94
+    baseSkill = randGaussian(60, 13.5);
+  }
+
+  // Age curve adjustment for current ratings vs potential
+  const ageFactor = age < 23 ? -4 : age > 33 ? -3 : 1;
+  const potential = clamp(baseSkill + (isRookie ? Math.random() * 14 + 4 : Math.max(0, (27 - age) * 1.4)), 40, 99);
+
+  const player = {
+    id,
+    name: `${firstName} ${lastName}`,
+    age,
+    bats,
+    throws,
+    isPitcher,
+    position,
+    teamId: null, // null = Waiver Pool
+    potential,
+    seasonStats: createEmptySeasonStats(isPitcher),
+    careerStats: createEmptySeasonStats(isPitcher),
+  };
+
+  if (isPitcher) {
+    player.velocity = clamp(baseSkill + ageFactor + randGaussian(0, 9), 25, 99);
+    player.control = clamp(baseSkill + ageFactor + randGaussian(0, 9), 25, 99);
+    player.finesse = clamp(baseSkill + ageFactor + randGaussian(0, 9), 25, 99);
+    player.fatigue = 0; // 0 to 100
+  } else {
+    let spdMod = 0, powMod = 0, glvMod = 0;
+    if (position === "1B" || position === "DH") { powMod = 6; spdMod = -6; }
+    if (position === "SS" || position === "CF" || position === "C") { glvMod = 6; }
+    if (position === "CF" || position === "2B" || position === "LF") { spdMod = 5; }
+
+    player.speed = clamp(baseSkill + ageFactor + spdMod + randGaussian(0, 9), 25, 99);
+    player.power = clamp(baseSkill + ageFactor + powMod + randGaussian(0, 9), 25, 99);
+    player.glove = clamp(baseSkill + ageFactor + glvMod + randGaussian(0, 9), 25, 99);
+  }
+
+  player.ovr = calculateOverall(player);
+  return player;
+}
+
+// Generate exact 1,344 player pool balanced for 32 teams (30 active + 12 waiver each)
+function generateInitialPlayerPool() {
+  const pool = [];
+  // Target positional distribution across 1,344 players (approx 42 per position group)
+  const positionQuotas = [
+    { pos: "C", isP: false, count: 96 },
+    { pos: "1B", isP: false, count: 96 },
+    { pos: "2B", isP: false, count: 96 },
+    { pos: "3B", isP: false, count: 96 },
+    { pos: "SS", isP: false, count: 96 },
+    { pos: "LF", isP: false, count: 96 },
+    { pos: "CF", isP: false, count: 96 },
+    { pos: "RF", isP: false, count: 96 },
+    { pos: "DH", isP: false, count: 64 },
+    { pos: "SP", isP: true, count: 256 },
+    { pos: "RP", isP: true, count: 256 },
+  ]; // Total = 832 hitters + 512 pitchers = 1,344 players!
+
+  for (const q of positionQuotas) {
+    for (let i = 0; i < q.count; i++) {
+      pool.push(generatePlayer({ isRookie: false, forcedPitcher: q.isP, forcedPos: q.pos }));
+    }
+  }
+  return pool.sort((a, b) => b.ovr - a.ovr);
+}
+
+// Generate 160 Rookie Draft Prospects (5 per team x 32 teams) with high-to-low talent spread
+function generateRookieClass(year) {
+  const prospects = [];
+  // 160 prospects: 12 generational, 36 high, 64 mid, 48 low
+  const tiers = [
+    ...Array(12).fill("generational"),
+    ...Array(36).fill("high"),
+    ...Array(64).fill("mid"),
+    ...Array(48).fill("low"),
+  ];
+  for (let i = 0; i < 160; i++) {
+    const p = generatePlayer({ isRookie: true, talentTier: tiers[i] });
+    p.draftYear = year;
+    prospects.push(p);
+  }
+  return prospects.sort((a, b) => b.ovr - a.ovr);
+}
+
+// Create initial teams & future draft picks (3 years rolling)
+function createInitialLeague(startYear = 2026) {
+  const teams = TEAM_CONFIGS.map((cfg) => ({
+    ...cfg,
+    wins: 0,
+    losses: 0,
+    runsScored: 0,
+    runsAllowed: 0,
+    streak: 0,
+    last10: [],
+    championships: 0,
+  }));
+
+  const draftPicks = [];
+  for (let yr = startYear + 1; yr <= startYear + 3; yr++) {
+    for (let round = 1; round <= 5; round++) {
+      for (const team of teams) {
+        draftPicks.push({
+          id: `PICK-${yr}-R${round}-${team.id}`,
+          year: yr,
+          round,
+          originalTeamId: team.id,
+          ownerTeamId: team.id,
+        });
+      }
+    }
+  }
+
+  return { teams, draftPicks };
+}
+
+// ============================================================================
+// 2. STATISTICAL & VALUATION HELPERS
+// ============================================================================
+
+function formatIP(ipOuts) {
+  const full = Math.floor(ipOuts / 3);
+  const rem = ipOuts % 3;
+  return `${full}.${rem}`;
+}
+
+function getHitterSlash(s) {
+  const avg = s.ab > 0 ? s.h / s.ab : 0;
+  const pa = s.ab + s.bb;
+  const obp = pa > 0 ? (s.h + s.bb) / pa : 0;
+  const singles = s.h - s.doubles - s.triples - s.hr;
+  const tb = singles + s.doubles * 2 + s.triples * 3 + s.hr * 4;
+  const slg = s.ab > 0 ? tb / s.ab : 0;
+  return {
+    avg: avg.toFixed(3).replace(/^0/, ""),
+    obp: obp.toFixed(3).replace(/^0/, ""),
+    slg: slg.toFixed(3).replace(/^0/, ""),
+    ops: (obp + slg).toFixed(3).replace(/^0/, ""),
+    rawOps: obp + slg,
+  };
+}
+
+function getPitcherRatios(s) {
+  const ip = s.ipOuts / 3;
+  const era = ip > 0 ? (s.er * 9) / ip : 0;
+  const whip = ip > 0 ? (s.h + s.bb) / ip : 0;
+  return {
+    ipStr: formatIP(s.ipOuts),
+    era: era.toFixed(2),
+    whip: whip.toFixed(2),
+    rawEra: ip > 0 ? era : 99.99,
+  };
+}
+
+function getRatingColor(val) {
+  if (val >= 85) return "bg-emerald-500/20 text-emerald-300 border-emerald-500/40";
+  if (val >= 75) return "bg-sky-500/20 text-sky-300 border-sky-500/40";
+  if (val >= 65) return "bg-indigo-500/20 text-indigo-300 border-indigo-500/40";
+  if (val >= 52) return "bg-slate-700/60 text-slate-200 border-slate-600/50";
+  return "bg-amber-500/15 text-amber-300 border-amber-500/30";
+}
+
+function getPlayerTradeValue(player) {
+  // Value scale roughly 50 to 1200
+  const ovrFactor = Math.pow(Math.max(30, player.ovr) - 25, 2.05);
+  const potBonus = Math.max(0, player.potential - player.ovr) * (player.age <= 24 ? 9 : 3);
+  let ageMult = 1.0;
+  if (player.age <= 23) ageMult = 1.28;
+  else if (player.age <= 27) ageMult = 1.15;
+  else if (player.age <= 30) ageMult = 0.95;
+  else if (player.age <= 33) ageMult = 0.72;
+  else ageMult = 0.48;
+
+  return Math.round((ovrFactor * 0.45 + potBonus) * ageMult);
+}
+
+function getDraftPickTradeValue(pick, teams, currentYear) {
+  const origTeam = teams.find((t) => t.id === pick.originalTeamId);
+  // Estimate pick slot from current standings (worse record = higher pick value)
+  const sorted = [...teams].sort((a, b) => {
+    const pctA = a.wins + a.losses > 0 ? a.wins / (a.wins + a.losses) : 0.5;
+    const pctB = b.wins + b.losses > 0 ? b.wins / (b.wins + b.losses) : 0.5;
+    return pctA - pctB;
+  });
+  const slot = Math.max(1, sorted.findIndex((t) => t.id === pick.originalTeamId) + 1); // 1 = worst team, 32 = best
+  const roundBase = [0, 420, 230, 130, 75, 45][pick.round] || 30;
+  const slotMult = 1.35 - (slot / 32) * 0.65; // #1 pick gets 1.33x, #32 gets 0.70x
+  const yearDiscount = Math.pow(0.86, Math.max(0, pick.year - currentYear - 1));
+  return Math.round(roundBase * slotMult * yearDiscount);
+}
+
+// Determine AI positional needs when drafting
+function getTeamRosterNeeds(roster) {
+  const counts = { C: 0, "1B": 0, "2B": 0, "3B": 0, SS: 0, LF: 0, CF: 0, RF: 0, DH: 0, SP: 0, RP: 0 };
+  roster.forEach((p) => { counts[p.position] = (counts[p.position] || 0) + 1; });
+  const totalHitters = roster.filter((p) => !p.isPitcher).length;
+  const totalPitchers = roster.filter((p) => p.isPitcher).length;
+  return { counts, totalHitters, totalPitchers };
+}
+
+function selectBestDraftPickForAI(availablePlayers, teamRoster) {
+  const { counts, totalHitters, totalPitchers } = getTeamRosterNeeds(teamRoster);
+  const topCandidates = availablePlayers.slice(0, 28);
+  let bestPlayer = topCandidates[0];
+  let bestScore = -9999;
+
+  for (const p of topCandidates) {
+    let score = p.ovr * 1.6 + (p.potential - p.ovr) * 0.45 - Math.max(0, p.age - 28) * 1.5;
+
+    // Positional balancing for 30-man roster (target ~16 hitters, ~14 pitchers)
+    if (p.isPitcher) {
+      if (totalPitchers >= 15) score -= 45;
+      else if (totalPitchers < 13 && teamRoster.length > 22) score += 18;
+      if (p.position === "SP" && counts.SP < 6) score += 12;
+      if (p.position === "RP" && counts.RP < 7) score += 10;
+    } else {
+      if (totalHitters >= 17) score -= 45;
+      else if (totalHitters < 15 && teamRoster.length > 22) score += 18;
+      if ((counts[p.position] || 0) === 0) score += 16;
+      else if ((counts[p.position] || 0) === 1 && p.position !== "DH") score += 6;
+      else if ((counts[p.position] || 0) >= 3) score -= 22;
+    }
+
+    // Slight randomness so AI GMs behave uniquely
+    score += (Math.random() - 0.5) * 6;
+    if (score > bestScore) {
+      bestScore = score;
+      bestPlayer = p;
+    }
+  }
+  return bestPlayer;
+}
+
+// ============================================================================
+// 3. REGULAR SEASON SCHEDULE & GAME SIMULATION ENGINE
+// ============================================================================
+
+function generateSeasonSchedule(teams) {
+  // 162 games per team = 2,592 total league games across 162 game days (16 games/day)
+  // Using circle-method round-robin pairings to ensure every team plays 162 balanced games
+  const ids = teams.map((t) => t.id);
+  const n = ids.length; // 32
+  const schedule = []; // Array of 162 days, each day has 16 matchups [homeId, awayId]
+
+  const fixed = ids[0];
+  let rotating = ids.slice(1);
+
+  const singleRoundRobin = [];
+  for (let round = 0; round < n - 1; round++) {
+    const dayGames = [];
+    const p1 = fixed;
+    const p2 = rotating[0];
+    dayGames.push(round % 2 === 0 ? [p1, p2] : [p2, p1]);
+
+    for (let i = 1; i < n / 2; i++) {
+      const tA = rotating[i];
+      const tB = rotating[n - 1 - i];
+      dayGames.push((round + i) % 2 === 0 ? [tA, tB] : [tB, tA]);
+    }
+    singleRoundRobin.push(dayGames);
+    rotating = [rotating[rotating.length - 1], ...rotating.slice(0, rotating.length - 1)];
+  }
+
+  // Repeat cycles to reach 162 days (5 full 31-day cycles = 155 days + 7 extra days = 162 days)
+  for (let d = 0; d < 162; d++) {
+    const template = singleRoundRobin[d % singleRoundRobin.length];
+    const flipHome = Math.floor(d / singleRoundRobin.length) % 2 === 1;
+    schedule.push(
+      template.map(([h, a]) => (flipHome ? [a, h] : [h, a]))
+    );
+  }
+  return schedule;
+}
+
+function buildLineupAndPitching(roster) {
+  const hitters = roster.filter((p) => !p.isPitcher).sort((a, b) => b.ovr - a.ovr);
+  const sps = roster.filter((p) => p.position === "SP").sort((a, b) => b.ovr - a.ovr);
+  const rps = roster.filter((p) => p.position === "RP").sort((a, b) => b.ovr - a.ovr);
+
+  // Pick 9 starting hitters trying to fill positions
+  const usedIds = new Set();
+  const lineup = [];
+  for (const pos of HITTER_POSITIONS) {
+    const match = hitters.find((h) => h.position === pos && !usedIds.has(h.id));
+    if (match) {
+      usedIds.add(match.id);
+      lineup.push(match);
+    }
+  }
+  for (const h of hitters) {
+    if (lineup.length >= 9) break;
+    if (!usedIds.has(h.id)) {
+      usedIds.add(h.id);
+      lineup.push(h);
+    }
+  }
+  // Bench hitters for pinch hitting / rest
+  const bench = hitters.filter((h) => !usedIds.has(h.id));
+
+  // Starting pitcher rotation (pick healthiest / top 5 rotation)
+  const rotation = sps.length > 0 ? sps.slice(0, 5) : rps.slice(0, 5);
+  const bullpen = rps.length > 0 ? rps : sps.slice(5);
+
+  return { lineup, bench, rotation, bullpen };
+}
+
+function simulateSingleGame(homeTeam, awayTeam, homeRoster, awayRoster, gameDay) {
+  const homeSetup = buildLineupAndPitching(homeRoster);
+  const awaySetup = buildLineupAndPitching(awayRoster);
+
+  const homeSP = homeSetup.rotation[gameDay % Math.max(1, homeSetup.rotation.length)] || homeRoster[0];
+  const awaySP = awaySetup.rotation[gameDay % Math.max(1, awaySetup.rotation.length)] || awayRoster[0];
+
+  // Team defensive glove average
+  const homeGlove = homeSetup.lineup.reduce((acc, p) => acc + p.glove, 0) / Math.max(1, homeSetup.lineup.length);
+  const awayGlove = awaySetup.lineup.reduce((acc, p) => acc + p.glove, 0) / Math.max(1, awaySetup.lineup.length);
+
+  let homeRuns = 0;
+  let awayRuns = 0;
+
+  // Track game stats per player id
+  const statDeltas = {};
+  const ensureDelta = (p) => {
+    if (!statDeltas[p.id]) {
+      statDeltas[p.id] = p.isPitcher
+        ? { g: 0, gs: 0, w: 0, l: 0, sv: 0, ipOuts: 0, h: 0, er: 0, bb: 0, so: 0 }
+        : { g: 0, ab: 0, r: 0, h: 0, doubles: 0, triples: 0, hr: 0, rbi: 0, bb: 0, so: 0, sb: 0 };
+    }
+    return statDeltas[p.id];
+  };
+
+  homeSetup.lineup.forEach((p) => { ensureDelta(p).g = 1; });
+  awaySetup.lineup.forEach((p) => { ensureDelta(p).g = 1; });
+  if (homeSP) { const d = ensureDelta(homeSP); d.g = 1; d.gs = 1; }
+  if (awaySP) { const d = ensureDelta(awaySP); d.g = 1; d.gs = 1; }
+
+  let homeBatterIdx = 0;
+  let awayBatterIdx = 0;
+  let homePitcher = homeSP;
+  let awayPitcher = awaySP;
+  let homePitcherOuts = 0;
+  let awayPitcherOuts = 0;
+  let homePitcherRuns = 0;
+  let awayPitcherRuns = 0;
+
+  const pickReliever = (bullpen, currentP, isCloseLate) => {
+    if (!bullpen || bullpen.length === 0) return currentP;
+    if (isCloseLate) {
+      // Closer is highest OVR reliever
+      return bullpen[0];
+    }
+    const pool = bullpen.slice(1);
+    if (pool.length === 0) return bullpen[0];
+    return pool[Math.floor(Math.random() * pool.length)];
+  };
+
+  const simHalfInning = (battingLineup, batterIdxRef, pitchingTeamPitcher, fieldGlove, isHomeBatting, inning) => {
+    let outs = 0;
+    let runners = [false, false, false]; // 1B, 2B, 3B
+    let runsThisInning = 0;
+    let safety = 0;
+
+    while (outs < 3 && safety < 25) {
+      safety++;
+      const batter = battingLineup[batterIdxRef.idx % battingLineup.length];
+      batterIdxRef.idx++;
+      const bStat = ensureDelta(batter);
+      const pStat = ensureDelta(pitchingTeamPitcher);
+
+      // Platoon L/R bonus
+      let platoonEdge = 0;
+      if (batter.bats === "S") platoonEdge = 2.5;
+      else if (batter.bats !== pitchingTeamPitcher.throws) platoonEdge = 3.5;
+      else platoonEdge = -2.5;
+
+      // Pitcher ratings vs Hitter ratings
+      const pitchSkill =
+        pitchingTeamPitcher.velocity * 0.36 +
+        pitchingTeamPitcher.control * 0.34 +
+        pitchingTeamPitcher.finesse * 0.30;
+      const hitSkill = batter.power * 0.45 + batter.speed * 0.25 + batter.glove * 0.1 + 15;
+
+      const diff = (hitSkill + platoonEdge - pitchSkill) / 100; // roughly -0.5 to +0.5
+
+      // Probabilities per PA
+      const bbProb = clamp(7.5 + (60 - pitchingTeamPitcher.control) * 0.11 + diff * 4, 3, 18) / 100;
+      const soProb = clamp(21.5 + (pitchingTeamPitcher.velocity * 0.55 + pitchingTeamPitcher.finesse * 0.45 - 60) * 0.18 - diff * 8, 9, 38) / 100;
+      const hitProb = clamp(24.5 + diff * 13 - (fieldGlove - 60) * 0.08, 14, 36) / 100;
+
+      const roll = Math.random();
+      if (roll < bbProb) {
+        // Walk
+        bStat.bb++;
+        pStat.bb++;
+        if (runners[0] && runners[1] && runners[2]) {
+          runsThisInning++;
+          bStat.rbi++;
+          pStat.er++;
+        } else if (runners[0] && runners[1]) {
+          runners[2] = true;
+        } else if (runners[0]) {
+          runners[1] = true;
+        } else {
+          runners[0] = true;
+        }
+      } else if (roll < bbProb + soProb) {
+        // Strikeout
+        bStat.ab++;
+        bStat.so++;
+        pStat.so++;
+        pStat.ipOuts++;
+        outs++;
+      } else if (roll < bbProb + soProb + hitProb) {
+        // Base Hit! Determine Single, Double, Triple, HR
+        bStat.ab++;
+        bStat.h++;
+        pStat.h++;
+
+        const hrProb = clamp(7 + (batter.power - 55) * 0.24 - (pitchingTeamPitcher.finesse - 60) * 0.08, 2, 26) / 100;
+        const tripleProb = clamp(1.5 + (batter.speed - 60) * 0.06, 0.3, 6) / 100;
+        const doubleProb = clamp(17 + (batter.power * 0.5 + batter.speed * 0.5 - 60) * 0.15, 8, 28) / 100;
+
+        const hitRoll = Math.random();
+        if (hitRoll < hrProb) {
+          // Home Run
+          bStat.hr++;
+          const rbi = 1 + (runners[0] ? 1 : 0) + (runners[1] ? 1 : 0) + (runners[2] ? 1 : 0);
+          runsThisInning += rbi;
+          bStat.rbi += rbi;
+          bStat.r++;
+          pStat.er += rbi;
+          runners = [false, false, false];
+        } else if (hitRoll < hrProb + tripleProb) {
+          bStat.triples++;
+          const rbi = (runners[0] ? 1 : 0) + (runners[1] ? 1 : 0) + (runners[2] ? 1 : 0);
+          runsThisInning += rbi;
+          bStat.rbi += rbi;
+          pStat.er += rbi;
+          runners = [false, false, true];
+        } else if (hitRoll < hrProb + tripleProb + doubleProb) {
+          bStat.doubles++;
+          let rbi = (runners[2] ? 1 : 0) + (runners[1] ? 1 : 0);
+          const firstScores = runners[0] && batter.speed > 65 && Math.random() < 0.45;
+          if (firstScores) rbi++;
+          runsThisInning += rbi;
+          bStat.rbi += rbi;
+          pStat.er += rbi;
+          runners = [false, true, runners[0] && !firstScores];
+        } else {
+          // Single
+          let rbi = runners[2] ? 1 : 0;
+          const secondScores = runners[1] && Math.random() < 0.55;
+          if (secondScores) rbi++;
+          runsThisInning += rbi;
+          bStat.rbi += rbi;
+          pStat.er += rbi;
+          runners = [true, runners[0], runners[1] && !secondScores];
+        }
+
+        // Stolen base attempt if runner on 1B and < 2 outs
+        if (runners[0] && !runners[1] && outs < 2 && batter.speed >= 68 && Math.random() < (batter.speed - 55) * 0.006) {
+          if (Math.random() < 0.76) {
+            bStat.sb++;
+            runners[0] = false;
+            runners[1] = true;
+          } else {
+            runners[0] = false;
+            outs++;
+            pStat.ipOuts++;
+          }
+        }
+      } else {
+        // Ball in play out
+        bStat.ab++;
+        pStat.ipOuts++;
+        outs++;
+        // Sac fly if runner on 3B and < 2 outs
+        if (runners[2] && outs < 3 && Math.random() < 0.28) {
+          runners[2] = false;
+          runsThisInning++;
+          bStat.rbi++;
+          pStat.er++;
+        }
+      }
+    }
+    return { runs: runsThisInning, outsRecorded: outs };
+  };
+
+  const homeIdxRef = { idx: 0 };
+  const awayIdxRef = { idx: 0 };
+
+  let inning = 1;
+  while (inning <= 15) {
+    // Top of inning: Away bats vs Home pitcher
+    if (homePitcher === homeSP && (homePitcherOuts >= 18 || homePitcherRuns >= 5 || inning >= 7)) {
+      homePitcher = pickReliever(homeSetup.bullpen, homePitcher, inning >= 9 && Math.abs(homeRuns - awayRuns) <= 3);
+      ensureDelta(homePitcher).g = 1;
+    } else if (homePitcher !== homeSP && inning >= 9 && Math.abs(homeRuns - awayRuns) <= 3) {
+      homePitcher = pickReliever(homeSetup.bullpen, homePitcher, true);
+      ensureDelta(homePitcher).g = 1;
+    }
+
+    const topRes = simHalfInning(awaySetup.lineup, awayIdxRef, homePitcher, homeGlove, false, inning);
+    awayRuns += topRes.runs;
+    if (homePitcher === homeSP) {
+      homePitcherOuts += topRes.outsRecorded;
+      homePitcherRuns += topRes.runs;
+    }
+
+    // Check if bottom of 9th+ is unnecessary
+    if (inning >= 9 && homeRuns > awayRuns) {
+      break;
+    }
+
+    // Bottom of inning: Home bats vs Away pitcher
+    if (awayPitcher === awaySP && (awayPitcherOuts >= 18 || awayPitcherRuns >= 5 || inning >= 7)) {
+      awayPitcher = pickReliever(awaySetup.bullpen, awayPitcher, inning >= 9 && Math.abs(homeRuns - awayRuns) <= 3);
+      ensureDelta(awayPitcher).g = 1;
+    } else if (awayPitcher !== awaySP && inning >= 9 && Math.abs(homeRuns - awayRuns) <= 3) {
+      awayPitcher = pickReliever(awaySetup.bullpen, awayPitcher, true);
+      ensureDelta(awayPitcher).g = 1;
+    }
+
+    const botRes = simHalfInning(homeSetup.lineup, homeIdxRef, awayPitcher, awayGlove, true, inning);
+    homeRuns += botRes.runs;
+    if (awayPitcher === awaySP) {
+      awayPitcherOuts += botRes.outsRecorded;
+      awayPitcherRuns += botRes.runs;
+    }
+
+    if (inning >= 9 && homeRuns !== awayRuns) {
+      break;
+    }
+    inning++;
+  }
+
+  // Tie-breaker safety if 15 innings ended tied
+  if (homeRuns === awayRuns) {
+    if (Math.random() < 0.52) homeRuns++;
+    else awayRuns++;
+  }
+
+  const homeWon = homeRuns > awayRuns;
+
+  // Assign W / L / SV
+  if (homeWon) {
+    ensureDelta(homeSP).w = 1;
+    ensureDelta(awaySP).l = 1;
+    if (homePitcher && homePitcher.id !== homeSP.id && homeRuns - awayRuns <= 3) {
+      ensureDelta(homePitcher).sv = 1;
+    }
+  } else {
+    ensureDelta(awaySP).w = 1;
+    ensureDelta(homeSP).l = 1;
+    if (awayPitcher && awayPitcher.id !== awaySP.id && awayRuns - homeRuns <= 3) {
+      ensureDelta(awayPitcher).sv = 1;
+    }
+  }
+
+  return {
+    homeTeamId: homeTeam.id,
+    awayTeamId: awayTeam.id,
+    homeRuns,
+    awayRuns,
+    homeWon,
+    statDeltas,
+  };
+}
+
+// ============================================================================
+// 4. PLAYOFFS & OFFSEASON ENGINE
+// ============================================================================
+
+function simulatePlayoffs(teams, playersByTeam) {
+  // Top 6 per league: 3 Division Winners + 3 Wild Cards
+  const buildLeagueBracket = (league) => {
+    const lgTeams = teams.filter((t) => t.league === league);
+    const divisions = ["East", "Central", "West"];
+    const divWinners = divisions.map((div) => {
+      const divTeams = lgTeams.filter((t) => t.division === div).sort((a, b) => b.wins - a.wins || (b.runsScored - b.runsAllowed) - (a.runsScored - a.runsAllowed));
+      return divTeams[0];
+    }).sort((a, b) => b.wins - a.wins);
+
+    const winnerIds = new Set(divWinners.map((t) => t.id));
+    const wildCards = lgTeams
+      .filter((t) => !winnerIds.has(t.id))
+      .sort((a, b) => b.wins - a.wins || (b.runsScored - b.runsAllowed) - (a.runsScored - a.runsAllowed))
+      .slice(0, 3);
+
+    return [...divWinners, ...wildCards]; // Seeds 1..6
+  };
+
+  const simSeries = (teamA, teamB, bestOf) => {
+    const needed = Math.ceil(bestOf / 2);
+    let wA = 0, wB = 0;
+    const rosterA = playersByTeam[teamA.id] || [];
+    const rosterB = playersByTeam[teamB.id] || [];
+    let g = 0;
+    while (wA < needed && wB < needed) {
+      const isAHome = g % 2 === 0;
+      const res = isAHome
+        ? simulateSingleGame(teamA, teamB, rosterA, rosterB, g)
+        : simulateSingleGame(teamB, teamA, rosterB, rosterA, g);
+      const aWon = isAHome ? res.homeWon : !res.homeWon;
+      if (aWon) wA++;
+      else wB++;
+      g++;
+    }
+    return {
+      winner: wA > wB ? teamA : teamB,
+      loser: wA > wB ? teamB : teamA,
+      score: `${Math.max(wA, wB)}-${Math.min(wA, wB)}`,
+    };
+  };
+
+  const alSeeds = buildLeagueBracket("AL");
+  const nlSeeds = buildLeagueBracket("NL");
+
+  // Wild Card Round (Best of 3): #3 vs #6, #4 vs #5
+  const alWC1 = simSeries(alSeeds[2], alSeeds[5], 3);
+  const alWC2 = simSeries(alSeeds[3], alSeeds[4], 3);
+  const nlWC1 = simSeries(nlSeeds[2], nlSeeds[5], 3);
+  const nlWC2 = simSeries(nlSeeds[3], nlSeeds[4], 3);
+
+  // Division Series (Best of 5): #1 vs WC2, #2 vs WC1
+  const alDS1 = simSeries(alSeeds[0], alWC2.winner, 5);
+  const alDS2 = simSeries(alSeeds[1], alWC1.winner, 5);
+  const nlDS1 = simSeries(nlSeeds[0], nlWC2.winner, 5);
+  const nlDS2 = simSeries(nlSeeds[1], nlWC1.winner, 5);
+
+  // Championship Series (Best of 7)
+  const alCS = simSeries(alDS1.winner, alDS2.winner, 7);
+  const nlCS = simSeries(nlDS1.winner, nlDS2.winner, 7);
+
+  // World Series (Best of 7)
+  const worldSeries = simSeries(alCS.winner, nlCS.winner, 7);
+
+  return {
+    alSeeds,
+    nlSeeds,
+    rounds: {
+      wildCard: [alWC1, alWC2, nlWC1, nlWC2],
+      divisional: [alDS1, alDS2, nlDS1, nlDS2],
+      championship: [alCS, nlCS],
+      worldSeries,
+    },
+    champion: worldSeries.winner,
+    runnerUp: worldSeries.loser,
+  };
+}
+
+// ============================================================================
+// 5. REUSABLE UI COMPONENTS
+// ============================================================================
+
+function RatingBadge({ value, size = "sm" }) {
+  const cls = getRatingColor(value);
+  const sz = size === "lg" ? "px-2.5 py-1 text-sm font-bold" : "px-1.5 py-0.5 text-xs font-semibold";
+  return (
+    <span className={`inline-flex items-center justify-center rounded border font-mono ${sz} ${cls}`}>
+      {value}
+    </span>
+  );
+}
+
+function TeamBadge({ team, size = "sm" }) {
+  if (!team) return <span className="text-slate-400 text-xs">FA</span>;
+  const sz = size === "lg" ? "w-9 h-9 text-sm" : "w-6 h-6 text-[10px]";
+  return (
+    <span
+      className={`inline-flex items-center justify-center rounded-md font-bold tracking-tight shrink-0 shadow-sm border border-white/15 ${sz}`}
+      style={{ backgroundColor: team.color, color: team.accent }}
+    >
+      {team.id}
+    </span>
+  );
+}
+
+function PlayerDetailModal({ player, team, onClose }) {
+  if (!player) return null;
+  const slash = !player.isPitcher ? getHitterSlash(player.seasonStats) : null;
+  const cSlash = !player.isPitcher ? getHitterSlash(player.careerStats) : null;
+  const ratios = player.isPitcher ? getPitcherRatios(player.seasonStats) : null;
+  const cRatios = player.isPitcher ? getPitcherRatios(player.careerStats) : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4" onClick={onClose}>
+      <div
+        className="bg-slate-900 border border-slate-700 rounded-xl max-w-2xl w-full p-6 shadow-2xl text-slate-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between border-b border-slate-800 pb-4">
+          <div className="flex items-center gap-3.5">
+            <TeamBadge team={team} size="lg" />
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h3 className="text-xl font-bold text-white">{player.name}</h3>
+                <span className="px-2 py-0.5 text-xs font-bold rounded bg-slate-800 text-sky-400 border border-slate-700">
+                  {player.position}
+                </span>
+                <RatingBadge value={player.ovr} size="lg" />
+              </div>
+              <p className="text-sm text-slate-400 mt-1">
+                {team ? `${team.city} ${team.name}` : "Waiver Wire / Free Agent"} • Age {player.age} • Bats: {player.bats} / Throws: {player.throws} • Potential: <span className="text-amber-300 font-semibold">{player.potential}</span>
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Ratings Grid */}
+        <div className="mt-5">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Scouting Attributes (20–99 Scale)</h4>
+          {player.isPitcher ? (
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "Velocity", val: player.velocity },
+                { label: "Control", val: player.control },
+                { label: "Finesse", val: player.finesse },
+              ].map((attr) => (
+                <div key={attr.label} className="bg-slate-950/70 border border-slate-800 rounded-lg p-3">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className="text-xs text-slate-400">{attr.label}</span>
+                    <RatingBadge value={attr.val} />
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-sky-500 rounded-full" style={{ width: `${attr.val}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: "Power", val: player.power },
+                { label: "Speed", val: player.speed },
+                { label: "Glove / Fielding", val: player.glove },
+              ].map((attr) => (
+                <div key={attr.label} className="bg-slate-950/70 border border-slate-800 rounded-lg p-3">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <span className="text-xs text-slate-400">{attr.label}</span>
+                    <RatingBadge value={attr.val} />
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${attr.val}%` }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Stats Table */}
+        <div className="mt-6">
+          <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">Performance Statistics</h4>
+          <div className="overflow-x-auto border border-slate-800 rounded-lg">
+            {player.isPitcher ? (
+              <table className="w-full text-xs text-right">
+                <thead className="bg-slate-950 text-slate-400">
+                  <tr>
+                    <th className="py-2 px-3 text-left">Split</th>
+                    <th className="py-2 px-2">G</th>
+                    <th className="py-2 px-2">GS</th>
+                    <th className="py-2 px-2">W</th>
+                    <th className="py-2 px-2">L</th>
+                    <th className="py-2 px-2">SV</th>
+                    <th className="py-2 px-2">IP</th>
+                    <th className="py-2 px-2">SO</th>
+                    <th className="py-2 px-2">BB</th>
+                    <th className="py-2 px-2">ERA</th>
+                    <th className="py-2 px-3">WHIP</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-mono">
+                  <tr>
+                    <td className="py-2 px-3 text-left font-sans font-semibold text-sky-400">Current Season</td>
+                    <td className="px-2">{player.seasonStats.g}</td>
+                    <td className="px-2">{player.seasonStats.gs}</td>
+                    <td className="px-2">{player.seasonStats.w}</td>
+                    <td className="px-2">{player.seasonStats.l}</td>
+                    <td className="px-2">{player.seasonStats.sv}</td>
+                    <td className="px-2">{ratios.ipStr}</td>
+                    <td className="px-2">{player.seasonStats.so}</td>
+                    <td className="px-2">{player.seasonStats.bb}</td>
+                    <td className="px-2 font-bold text-white">{ratios.era}</td>
+                    <td className="px-3">{ratios.whip}</td>
+                  </tr>
+                  <tr className="bg-slate-950/40">
+                    <td className="py-2 px-3 text-left font-sans text-slate-400">Career Totals</td>
+                    <td className="px-2">{player.careerStats.g + player.seasonStats.g}</td>
+                    <td className="px-2">{player.careerStats.gs + player.seasonStats.gs}</td>
+                    <td className="px-2">{player.careerStats.w + player.seasonStats.w}</td>
+                    <td className="px-2">{player.careerStats.l + player.seasonStats.l}</td>
+                    <td className="px-2">{player.careerStats.sv + player.seasonStats.sv}</td>
+                    <td className="px-2">{formatIP(player.careerStats.ipOuts + player.seasonStats.ipOuts)}</td>
+                    <td className="px-2">{player.careerStats.so + player.seasonStats.so}</td>
+                    <td className="px-2">{player.careerStats.bb + player.seasonStats.bb}</td>
+                    <td className="px-2">
+                      {getPitcherRatios({
+                        ipOuts: player.careerStats.ipOuts + player.seasonStats.ipOuts,
+                        er: player.careerStats.er + player.seasonStats.er,
+                        h: player.careerStats.h + player.seasonStats.h,
+                        bb: player.careerStats.bb + player.seasonStats.bb,
+                      }).era}
+                    </td>
+                    <td className="px-3">
+                      {getPitcherRatios({
+                        ipOuts: player.careerStats.ipOuts + player.seasonStats.ipOuts,
+                        er: player.careerStats.er + player.seasonStats.er,
+                        h: player.careerStats.h + player.seasonStats.h,
+                        bb: player.careerStats.bb + player.seasonStats.bb,
+                      }).whip}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full text-xs text-right">
+                <thead className="bg-slate-950 text-slate-400">
+                  <tr>
+                    <th className="py-2 px-3 text-left">Split</th>
+                    <th className="py-2 px-2">G</th>
+                    <th className="py-2 px-2">AB</th>
+                    <th className="py-2 px-2">H</th>
+                    <th className="py-2 px-2">HR</th>
+                    <th className="py-2 px-2">RBI</th>
+                    <th className="py-2 px-2">SB</th>
+                    <th className="py-2 px-2">AVG</th>
+                    <th className="py-2 px-2">OBP</th>
+                    <th className="py-2 px-3">SLG</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800 font-mono">
+                  <tr>
+                    <td className="py-2 px-3 text-left font-sans font-semibold text-emerald-400">Current Season</td>
+                    <td className="px-2">{player.seasonStats.g}</td>
+                    <td className="px-2">{player.seasonStats.ab}</td>
+                    <td className="px-2">{player.seasonStats.h}</td>
+                    <td className="px-2">{player.seasonStats.hr}</td>
+                    <td className="px-2">{player.seasonStats.rbi}</td>
+                    <td className="px-2">{player.seasonStats.sb}</td>
+                    <td className="px-2 font-bold text-white">{slash.avg}</td>
+                    <td className="px-2">{slash.obp}</td>
+                    <td className="px-3">{slash.slg}</td>
+                  </tr>
+                  <tr className="bg-slate-950/40">
+                    <td className="py-2 px-3 text-left font-sans text-slate-400">Career Totals</td>
+                    <td className="px-2">{player.careerStats.g + player.seasonStats.g}</td>
+                    <td className="px-2">{player.careerStats.ab + player.seasonStats.ab}</td>
+                    <td className="px-2">{player.careerStats.h + player.seasonStats.h}</td>
+                    <td className="px-2">{player.careerStats.hr + player.seasonStats.hr}</td>
+                    <td className="px-2">{player.careerStats.rbi + player.seasonStats.rbi}</td>
+                    <td className="px-2">{player.careerStats.sb + player.seasonStats.sb}</td>
+                    <td className="px-2">
+                      {getHitterSlash({
+                        ab: player.careerStats.ab + player.seasonStats.ab,
+                        h: player.careerStats.h + player.seasonStats.h,
+                        bb: player.careerStats.bb + player.seasonStats.bb,
+                        doubles: player.careerStats.doubles + player.seasonStats.doubles,
+                        triples: player.careerStats.triples + player.seasonStats.triples,
+                        hr: player.careerStats.hr + player.seasonStats.hr,
+                      }).avg}
+                    </td>
+                    <td className="px-2">
+                      {getHitterSlash({
+                        ab: player.careerStats.ab + player.seasonStats.ab,
+                        h: player.careerStats.h + player.seasonStats.h,
+                        bb: player.careerStats.bb + player.seasonStats.bb,
+                        doubles: player.careerStats.doubles + player.seasonStats.doubles,
+                        triples: player.careerStats.triples + player.seasonStats.triples,
+                        hr: player.careerStats.hr + player.seasonStats.hr,
+                      }).obp}
+                    </td>
+                    <td className="px-3">
+                      {getHitterSlash({
+                        ab: player.careerStats.ab + player.seasonStats.ab,
+                        h: player.careerStats.h + player.seasonStats.h,
+                        bb: player.careerStats.bb + player.seasonStats.bb,
+                        doubles: player.careerStats.doubles + player.seasonStats.doubles,
+                        triples: player.careerStats.triples + player.seasonStats.triples,
+                        hr: player.careerStats.hr + player.seasonStats.hr,
+                      }).slg}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// 6. MAIN APPLICATION COMPONENT
+// ============================================================================
+
+export default function App() {
+  // Game Lifecycle States: "SETUP" | "INAUGURAL_DRAFT" | "REGULAR_SEASON" | "PLAYOFFS_COMPLETE" | "ROOKIE_DRAFT" | "ROSTER_CUTS"
+  const [phase, setPhase] = useState("SETUP");
+  const [year, setYear] = useState(2026);
+  const [userTeamId, setUserTeamId] = useState("NYY");
+
+  // Core League Data
+  const [teams, setTeams] = useState([]);
+  const [players, setPlayers] = useState([]); // All players in universe (teamId = string or null for waiver)
+  const [draftPicks, setDraftPicks] = useState([]);
+  const [schedule, setSchedule] = useState([]);
+  const [currentDay, setCurrentDay] = useState(0); // 0 to 162
+
+  // Draft Room State
+  const [draftOrder, setDraftOrder] = useState([]); // Array of { pickNum, round, teamId, originalTeamId, pickId? }
+  const [currentPickIdx, setCurrentPickIdx] = useState(0);
+  const [draftPool, setDraftPool] = useState([]); // Undrafted players in active draft
+  const [draftHistory, setDraftHistory] = useState([]);
+
+  // Playoff & History State
+  const [playoffResults, setPlayoffResults] = useState(null);
+  const [championsHistory, setChampionsHistory] = useState([]);
+  const [transactions, setTransactions] = useState([]);
+  const [recentGames, setRecentGames] = useState([]);
+
+  // UI Navigation & Filters
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [toastMsg, setToastMsg] = useState(null);
+
+  const showToast = useCallback((text, type = "info") => {
+    setToastMsg({ text, type, id: Date.now() });
+  }, []);
+
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = setTimeout(() => setToastMsg(null), 4000);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
+
+  const addTransaction = useCallback((category, summary) => {
+    setTransactions((prev) => [
+      { id: `${Date.now()}-${Math.random()}`, year, day: currentDay, category, summary },
+      ...prev.slice(0, 149),
+    ]);
+  }, [year, currentDay]);
+
+  // Derived Lookups
+  const teamMap = useMemo(() => {
+    const map = {};
+    teams.forEach((t) => { map[t.id] = t; });
+    return map;
+  }, [teams]);
+
+  const userTeam = teamMap[userTeamId];
+
+  const playersByTeam = useMemo(() => {
+    const map = {};
+    teams.forEach((t) => { map[t.id] = []; });
+    const waivers = [];
+    players.forEach((p) => {
+      if (p.teamId && map[p.teamId]) map[p.teamId].push(p);
+      else waivers.push(p);
+    });
+    Object.keys(map).forEach((tid) => map[tid].sort((a, b) => b.ovr - a.ovr));
+    waivers.sort((a, b) => b.ovr - a.ovr);
+    return { byTeam: map, waivers };
+  }, [players, teams]);
+
+  // ==========================================================================
+  // GAME INITIALIZATION & INAUGURAL FANTASY DRAFT
+  // ==========================================================================
+
+  const startNewFranchise = (chosenTeamId) => {
+    globalPlayerCounter = 1;
+    const { teams: initTeams, draftPicks: initPicks } = createInitialLeague(2026);
+    const pool = generateInitialPlayerPool();
+    const sched = generateSeasonSchedule(initTeams);
+
+    // Randomize 32-team order for Inaugural 30-Round Snake Draft
+    const shuffledTeamIds = [...initTeams.map((t) => t.id)].sort(() => Math.random() - 0.5);
+    const order = [];
+    let pickCounter = 1;
+    for (let r = 1; r <= 30; r++) {
+      const roundOrder = r % 2 === 1 ? shuffledTeamIds : [...shuffledTeamIds].reverse();
+      for (const tid of roundOrder) {
+        order.push({
+          pickNum: pickCounter++,
+          round: r,
+          teamId: tid,
+          originalTeamId: tid,
+        });
+      }
+    }
+
+    setUserTeamId(chosenTeamId);
+    setYear(2026);
+    setTeams(initTeams);
+    setDraftPicks(initPicks);
+    setSchedule(sched);
+    setCurrentDay(0);
+    setPlayers([]);
+    setDraftPool(pool);
+    setDraftOrder(order);
+    setCurrentPickIdx(0);
+    setDraftHistory([]);
+    setPlayoffResults(null);
+    setChampionsHistory([]);
+    setRecentGames([]);
+    setTransactions([
+      {
+        id: "init-1",
+        year: 2026,
+        day: 0,
+        category: "LEAGUE",
+        summary: `2026 Inaugural Fantasy Draft initialized with 1,344 players across 32 franchises.`,
+      },
+    ]);
+    setPhase("INAUGURAL_DRAFT");
+    setActiveTab("draft");
+  };
+
+  // Draft Execution Helpers
+  const executeSingleDraftPick = useCallback((chosenPlayerId, currentIdx, currentPool, currentPlayers) => {
+    const slot = draftOrder[currentIdx];
+    if (!slot) return null;
+
+    const teamRoster = currentPlayers.filter((p) => p.teamId === slot.teamId);
+    let pickedPlayer = chosenPlayerId
+      ? currentPool.find((p) => p.id === chosenPlayerId)
+      : selectBestDraftPickForAI(currentPool, teamRoster);
+
+    if (!pickedPlayer) pickedPlayer = currentPool[0];
+
+    const updatedPlayer = { ...pickedPlayer, teamId: slot.teamId };
+    const nextPool = currentPool.filter((p) => p.id !== pickedPlayer.id);
+    const nextPlayers = [...currentPlayers, updatedPlayer];
+    const historyEntry = {
+      ...slot,
+      player: updatedPlayer,
+    };
+
+    return {
+      nextIdx: currentIdx + 1,
+      nextPool,
+      nextPlayers,
+      historyEntry,
+    };
+  }, [draftOrder]);
+
+  const finishActiveDraft = useCallback((finalPlayers, remainingPool, isRookie) => {
+    // Remaining pool players automatically enter the Waiver Wire (teamId: null)
+    const waiverPlayers = remainingPool.map((p) => ({ ...p, teamId: null }));
+    const mergedPlayers = [...finalPlayers, ...waiverPlayers];
+    setPlayers(mergedPlayers);
+    setDraftPool([]);
+
+    if (!isRookie) {
+      setPhase("REGULAR_SEASON");
+      setActiveTab("dashboard");
+      addTransaction("DRAFT", `Inaugural 30-Round Draft complete! 960 players drafted; ${waiverPlayers.length} placed on Waiver Wire.`);
+      showToast("Inaugural Draft Complete! Opening Day is ready.", "success");
+    } else {
+      // Check if any team exceeds 30 players (teams normally have 30 + 5 rookies = 35, need to trim back to 30)
+      // AI teams automatically trim down to their best 30 players, sending excess to waivers
+      const trimmedPlayers = [];
+      const userRoster = [];
+      const byT = {};
+      mergedPlayers.forEach((p) => {
+        if (!p.teamId) {
+          trimmedPlayers.push(p);
+        } else {
+          if (!byT[p.teamId]) byT[p.teamId] = [];
+          byT[p.teamId].push(p);
+        }
+      });
+
+      Object.entries(byT).forEach(([tid, roster]) => {
+        if (tid === userTeamId) {
+          userRoster.push(...roster);
+        } else {
+          // AI keeps top 30 balancing pitchers & hitters
+          roster.sort((a, b) => (b.ovr + (b.age <= 22 ? 6 : 0)) - (a.ovr + (a.age <= 22 ? 6 : 0)));
+          const keep = roster.slice(0, 30);
+          const cut = roster.slice(30).map((p) => ({ ...p, teamId: null }));
+          trimmedPlayers.push(...keep, ...cut);
+        }
+      });
+
+      setPlayers([...trimmedPlayers, ...userRoster]);
+      addTransaction("DRAFT", `${year} Rookie Draft concluded! Remaining prospects added to Waiver Pool.`);
+
+      if (userRoster.length > 30) {
+        setPhase("ROSTER_CUTS");
+        setActiveTab("roster");
+        showToast(`Rookie Draft complete! Trim your roster from ${userRoster.length} down to 30 players.`, "warning");
+      } else {
+        setPhase("REGULAR_SEASON");
+        setActiveTab("dashboard");
+        showToast(`${year} Regular Season is ready!`, "success");
+      }
+    }
+  }, [addTransaction, showToast, userTeamId, year]);
+
+  const handleUserDraftSelect = (playerId) => {
+    const slot = draftOrder[currentPickIdx];
+    if (!slot || slot.teamId !== userTeamId) return;
+
+    const res = executeSingleDraftPick(playerId, currentPickIdx, draftPool, players);
+    if (!res) return;
+
+    setDraftHistory((prev) => [res.historyEntry, ...prev]);
+    if (res.nextIdx >= draftOrder.length) {
+      finishActiveDraft(res.nextPlayers, res.nextPool, phase === "ROOKIE_DRAFT");
+    } else {
+      setCurrentPickIdx(res.nextIdx);
+      setDraftPool(res.nextPool);
+      setPlayers(res.nextPlayers);
+    }
+  };
+
+  const handleSimNextPick = () => {
+    if (currentPickIdx >= draftOrder.length) return;
+    const res = executeSingleDraftPick(null, currentPickIdx, draftPool, players);
+    if (!res) return;
+
+    setDraftHistory((prev) => [res.historyEntry, ...prev]);
+    if (res.nextIdx >= draftOrder.length) {
+      finishActiveDraft(res.nextPlayers, res.nextPool, phase === "ROOKIE_DRAFT");
+    } else {
+      setCurrentPickIdx(res.nextIdx);
+      setDraftPool(res.nextPool);
+      setPlayers(res.nextPlayers);
+    }
+  };
+
+  const handleSimToUserTurn = () => {
+    let idx = currentPickIdx;
+    let pool = draftPool;
+    let plrs = players;
+    const newHist = [];
+
+    // If currently user's turn, advance at least 1 pick first
+    if (idx < draftOrder.length && draftOrder[idx].teamId === userTeamId) {
+      const first = executeSingleDraftPick(null, idx, pool, plrs);
+      idx = first.nextIdx;
+      pool = first.nextPool;
+      plrs = first.nextPlayers;
+      newHist.unshift(first.historyEntry);
+    }
+
+    while (idx < draftOrder.length && draftOrder[idx].teamId !== userTeamId) {
+      const step = executeSingleDraftPick(null, idx, pool, plrs);
+      idx = step.nextIdx;
+      pool = step.nextPool;
+      plrs = step.nextPlayers;
+      newHist.unshift(step.historyEntry);
+    }
+
+    setDraftHistory((prev) => [...newHist, ...prev]);
+    if (idx >= draftOrder.length) {
+      finishActiveDraft(plrs, pool, phase === "ROOKIE_DRAFT");
+    } else {
+      setCurrentPickIdx(idx);
+      setDraftPool(pool);
+      setPlayers(plrs);
+    }
+  };
+
+  const handleAutoDraftAll = () => {
+    let idx = currentPickIdx;
+    let pool = draftPool;
+    let plrs = players;
+    const newHist = [];
+
+    while (idx < draftOrder.length) {
+      const step = executeSingleDraftPick(null, idx, pool, plrs);
+      idx = step.nextIdx;
+      pool = step.nextPool;
+      plrs = step.nextPlayers;
+      newHist.unshift(step.historyEntry);
+    }
+
+    setDraftHistory((prev) => [...newHist, ...prev]);
+    finishActiveDraft(plrs, pool, phase === "ROOKIE_DRAFT");
+  };
+
+  // ==========================================================================
+  // REGULAR SEASON SIMULATION & AI ROSTER MOVES
+  // ==========================================================================
+
+  const simulateDays = (numDays) => {
+    if (phase !== "REGULAR_SEASON" || currentDay >= 162) return;
+
+    const targetDay = Math.min(162, currentDay + numDays);
+    let workingTeams = teams.map((t) => ({ ...t }));
+    let workingPlayers = players.map((p) => ({
+      ...p,
+      seasonStats: { ...p.seasonStats },
+    }));
+
+    const tLookup = {};
+    workingTeams.forEach((t) => { tLookup[t.id] = t; });
+
+    const pLookup = {};
+    const rosterLookup = {};
+    workingTeams.forEach((t) => { rosterLookup[t.id] = []; });
+    workingPlayers.forEach((p) => {
+      pLookup[p.id] = p;
+      if (p.teamId && rosterLookup[p.teamId]) {
+        rosterLookup[p.teamId].push(p);
+      }
+    });
+
+    const userRecent = [];
+    const aiLogs = [];
+
+    for (let d = currentDay; d < targetDay; d++) {
+      const matchups = schedule[d] || [];
+      for (const [homeId, awayId] of matchups) {
+        const homeT = tLookup[homeId];
+        const awayT = tLookup[awayId];
+        const res = simulateSingleGame(homeT, awayT, rosterLookup[homeId], rosterLookup[awayId], d);
+
+        homeT.runsScored += res.homeRuns;
+        homeT.runsAllowed += res.awayRuns;
+        awayT.runsScored += res.awayRuns;
+        awayT.runsAllowed += res.homeRuns;
+
+        if (res.homeWon) {
+          homeT.wins++;
+          awayT.losses++;
+          homeT.streak = homeT.streak >= 0 ? homeT.streak + 1 : 1;
+          awayT.streak = awayT.streak <= 0 ? awayT.streak - 1 : -1;
+          homeT.last10 = [...homeT.last10.slice(-9), "W"];
+          awayT.last10 = [...awayT.last10.slice(-9), "L"];
+        } else {
+          awayT.wins++;
+          homeT.losses++;
+          awayT.streak = awayT.streak >= 0 ? awayT.streak + 1 : 1;
+          homeT.streak = homeT.streak <= 0 ? homeT.streak - 1 : -1;
+          awayT.last10 = [...awayT.last10.slice(-9), "W"];
+          homeT.last10 = [...homeT.last10.slice(-9), "L"];
+        }
+
+        if (homeId === userTeamId || awayId === userTeamId) {
+          userRecent.unshift({
+            day: d + 1,
+            homeId,
+            awayId,
+            homeRuns: res.homeRuns,
+            awayRuns: res.awayRuns,
+            userWon: (homeId === userTeamId && res.homeWon) || (awayId === userTeamId && !res.homeWon),
+          });
+        }
+
+        // Apply player box-score deltas
+        for (const [pid, delta] of Object.entries(res.statDeltas)) {
+          const plr = pLookup[pid];
+          if (!plr) continue;
+          const s = plr.seasonStats;
+          for (const k of Object.keys(delta)) {
+            s[k] = (s[k] || 0) + delta[k];
+          }
+        }
+      }
+
+      // Occasional AI Waiver Claim (every ~12 days)
+      if (d > 10 && d < 145 && d % 12 === 0) {
+        const waivers = workingPlayers.filter((p) => !p.teamId).sort((a, b) => b.ovr - a.ovr);
+        if (waivers.length > 0) {
+          const aiTeams = workingTeams.filter((t) => t.id !== userTeamId);
+          const randomAI = aiTeams[Math.floor(Math.random() * aiTeams.length)];
+          const aiRoster = rosterLookup[randomAI.id].sort((a, b) => a.ovr - b.ovr);
+          const topFA = waivers[0];
+          const weakest = aiRoster[0];
+          if (topFA && weakest && topFA.ovr > weakest.ovr + 4) {
+            topFA.teamId = randomAI.id;
+            weakest.teamId = null;
+            rosterLookup[randomAI.id] = [...aiRoster.slice(1), topFA];
+            aiLogs.push({
+              id: `ai-w-${d}-${randomAI.id}`,
+              year,
+              day: d + 1,
+              category: "WAIVER",
+              summary: `${randomAI.city} ${randomAI.name} claimed ${topFA.position} ${topFA.name} (${topFA.ovr} OVR) and waived ${weakest.name} (${weakest.ovr} OVR).`,
+            });
+          }
+        }
+      }
+
+      // Occasional CPU-to-CPU Trade before Trade Deadline (Day 115)
+      if (d > 30 && d < 115 && d % 25 === 0) {
+        const aiTeams = workingTeams.filter((t) => t.id !== userTeamId);
+        const t1 = aiTeams[Math.floor(Math.random() * aiTeams.length)];
+        const t2 = aiTeams.find((t) => t.id !== t1.id && t.league !== t1.league);
+        if (t1 && t2) {
+          const r1 = rosterLookup[t1.id].sort((a, b) => b.ovr - a.ovr);
+          const r2 = rosterLookup[t2.id].sort((a, b) => b.ovr - a.ovr);
+          const p1 = r1[Math.floor(Math.random() * 8) + 4];
+          const p2 = r2.find((p) => p.id !== p1?.id && Math.abs(getPlayerTradeValue(p) - getPlayerTradeValue(p1)) < 85);
+          if (p1 && p2) {
+            p1.teamId = t2.id;
+            p2.teamId = t1.id;
+            rosterLookup[t1.id] = rosterLookup[t1.id].filter((p) => p.id !== p1.id).concat(p2);
+            rosterLookup[t2.id] = rosterLookup[t2.id].filter((p) => p.id !== p2.id).concat(p1);
+            aiLogs.push({
+              id: `ai-tr-${d}-${t1.id}`,
+              year,
+              day: d + 1,
+              category: "TRADE",
+              summary: `TRADE: ${t1.id} acquires ${p2.position} ${p2.name} (${p2.ovr}) from ${t2.id} in exchange for ${p1.position} ${p1.name} (${p1.ovr}).`,
+            });
+          }
+        }
+      }
+    }
+
+    setTeams(workingTeams);
+    setPlayers(workingPlayers);
+    setCurrentDay(targetDay);
+    if (userRecent.length > 0) {
+      setRecentGames((prev) => [...userRecent, ...prev].slice(0, 30));
+    }
+    if (aiLogs.length > 0) {
+      setTransactions((prev) => [...aiLogs, ...prev].slice(0, 150));
+    }
+
+    if (targetDay >= 162) {
+      // Automatically run Playoffs upon finishing Game 162
+      const pResults = simulatePlayoffs(workingTeams, rosterLookup);
+      setPlayoffResults(pResults);
+      setTeams((prev) =>
+        prev.map((t) => (t.id === pResults.champion.id ? { ...t, championships: t.championships + 1 } : t))
+      );
+      setChampionsHistory((prev) => [
+        { year, champion: pResults.champion, runnerUp: pResults.runnerUp, score: pResults.rounds.worldSeries.score },
+        ...prev,
+      ]);
+      setPhase("PLAYOFFS_COMPLETE");
+      addTransaction("PLAYOFFS", `${year} World Series: ${pResults.champion.city} ${pResults.champion.name} defeated ${pResults.runnerUp.city} ${pResults.runnerUp.name} (${pResults.rounds.worldSeries.score})!`);
+      showToast(`${year} Regular Season & Playoffs Complete!`, "success");
+    }
+  };
+
+  // ==========================================================================
+  // OFFSEASON PROGRESSION & ANNUAL ROOKIE DRAFT TRANSITION
+  // ==========================================================================
+
+  const advanceToOffseasonRookieDraft = () => {
+    const nextYear = year + 1;
+
+    // 1. Roll season stats into career stats, age +1 year, apply progression/regression & retirements
+    const updatedPlayers = [];
+    let retiredCount = 0;
+
+    for (const p of players) {
+      const mergedCareer = {};
+      for (const k of Object.keys(p.careerStats)) {
+        mergedCareer[k] = (p.careerStats[k] || 0) + (p.seasonStats[k] || 0);
+      }
+
+      const nextAge = p.age + 1;
+      // Retirement check for older players
+      if (nextAge >= 36 && Math.random() < (nextAge - 34) * 0.22) {
+        retiredCount++;
+        continue;
+      }
+
+      let delta = 0;
+      if (nextAge <= 24) {
+        delta = Math.round(Math.random() * 4 + (p.potential > p.ovr ? 2 : 0));
+      } else if (nextAge <= 29) {
+        delta = Math.round((Math.random() - 0.35) * 3);
+      } else if (nextAge <= 33) {
+        delta = -Math.round(Math.random() * 3);
+      } else {
+        delta = -Math.round(Math.random() * 4 + 1);
+      }
+
+      const agedPlayer = {
+        ...p,
+        age: nextAge,
+        careerStats: mergedCareer,
+        seasonStats: createEmptySeasonStats(p.isPitcher),
+      };
+
+      if (agedPlayer.isPitcher) {
+        agedPlayer.velocity = clamp(agedPlayer.velocity + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
+        agedPlayer.control = clamp(agedPlayer.control + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
+        agedPlayer.finesse = clamp(agedPlayer.finesse + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
+      } else {
+        agedPlayer.power = clamp(agedPlayer.power + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
+        agedPlayer.speed = clamp(agedPlayer.speed + (nextAge > 29 ? delta - 1 : delta), 20, 99);
+        agedPlayer.glove = clamp(agedPlayer.glove + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
+      }
+      agedPlayer.ovr = calculateOverall(agedPlayer);
+      updatedPlayers.push(agedPlayer);
+    }
+
+    // 2. Sort teams in STRICT REVERSE STANDINGS ORDER (Worst record picks #1, Best record picks #32)
+    const reverseStandings = [...teams].sort((a, b) => {
+      if (a.wins !== b.wins) return a.wins - b.wins;
+      return (a.runsScored - a.runsAllowed) - (b.runsScored - b.runsAllowed);
+    });
+
+    const slotByOrigTeam = {};
+    reverseStandings.forEach((t, idx) => { slotByOrigTeam[t.id] = idx + 1; });
+
+    // 3. Build 5-round Rookie Draft order using traded draft picks for `nextYear`
+    const yearPicks = draftPicks.filter((pk) => pk.year === nextYear);
+    const orderedRookiePicks = [];
+    for (let r = 1; r <= 5; r++) {
+      const roundPicks = yearPicks
+        .filter((pk) => pk.round === r)
+        .sort((a, b) => (slotByOrigTeam[a.originalTeamId] || 16) - (slotByOrigTeam[b.originalTeamId] || 16));
+
+      roundPicks.forEach((pk, idx) => {
+        orderedRookiePicks.push({
+          pickNum: (r - 1) * 32 + idx + 1,
+          round: r,
+          teamId: pk.ownerTeamId,
+          originalTeamId: pk.originalTeamId,
+          pickId: pk.id,
+        });
+      });
+    }
+
+    // 4. Generate 160 new Rookie Prospects (5 per team x 32)
+    const rookieClass = generateRookieClass(nextYear);
+
+    // 5. Reset team W-L records for new season and roll forward future draft picks (+1 year)
+    const resetTeams = teams.map((t) => ({
+      ...t,
+      wins: 0,
+      losses: 0,
+      runsScored: 0,
+      runsAllowed: 0,
+      streak: 0,
+      last10: [],
+    }));
+
+    const newFutureYear = nextYear + 3;
+    const addedFuturePicks = [];
+    for (let r = 1; r <= 5; r++) {
+      for (const t of resetTeams) {
+        addedFuturePicks.push({
+          id: `PICK-${newFutureYear}-R${r}-${t.id}`,
+          year: newFutureYear,
+          round: r,
+          originalTeamId: t.id,
+          ownerTeamId: t.id,
+        });
+      }
+    }
+
+    setYear(nextYear);
+    setTeams(resetTeams);
+    setPlayers(updatedPlayers);
+    setDraftPicks((prev) => [...prev.filter((pk) => pk.year > nextYear), ...addedFuturePicks]);
+    setSchedule(generateSeasonSchedule(resetTeams));
+    setCurrentDay(0);
+    setPlayoffResults(null);
+    setRecentGames([]);
+    setDraftOrder(orderedRookiePicks);
+    setCurrentPickIdx(0);
+    setDraftPool(rookieClass);
+    setDraftHistory([]);
+    setPhase("ROOKIE_DRAFT");
+    setActiveTab("draft");
+    addTransaction("OFFSEASON", `Offseason ${nextYear}: ${retiredCount} veterans retired. Reverse-standings 5-round Rookie Draft underway (#1 pick: ${orderedRookiePicks[0]?.teamId}).`);
+    showToast(`Welcome to the ${nextYear} Offseason & Rookie Draft!`, "info");
+  };
+
+  // ==========================================================================
+  // WAIVER WIRE & ROSTER CUTS HANDLERS
+  // ==========================================================================
+
+  const handleWaiverClaimAndDrop = (claimPlayerId, dropPlayerId) => {
+    const userRoster = playersByTeam.byTeam[userTeamId] || [];
+    const claimPlr = players.find((p) => p.id === claimPlayerId && !p.teamId);
+    if (!claimPlr) return;
+
+    if (userRoster.length >= 30 && !dropPlayerId) {
+      showToast("Your 30-man roster is full. Select a player to release.", "error");
+      return;
+    }
+
+    const dropPlr = dropPlayerId ? players.find((p) => p.id === dropPlayerId && p.teamId === userTeamId) : null;
+
+    setPlayers((prev) =>
+      prev.map((p) => {
+        if (p.id === claimPlayerId) return { ...p, teamId: userTeamId };
+        if (dropPlr && p.id === dropPlr.id) return { ...p, teamId: null };
+        return p;
+      })
+    );
+
+    const msg = dropPlr
+      ? `${userTeamId} claimed ${claimPlr.position} ${claimPlr.name} (${claimPlr.ovr}) from waivers and released ${dropPlr.name} (${dropPlr.ovr}).`
+      : `${userTeamId} signed ${claimPlr.position} ${claimPlr.name} (${claimPlr.ovr}) from waivers.`;
+    addTransaction("WAIVER", msg);
+    showToast(msg, "success");
+  };
+
+  const handleReleasePlayer = (dropPlayerId) => {
+    const dropPlr = players.find((p) => p.id === dropPlayerId && p.teamId === userTeamId);
+    if (!dropPlr) return;
+    setPlayers((prev) => prev.map((p) => (p.id === dropPlayerId ? { ...p, teamId: null } : p)));
+    addTransaction("WAIVER", `${userTeamId} released ${dropPlr.position} ${dropPlr.name} (${dropPlr.ovr}) to the Waiver Pool.`);
+    showToast(`Released ${dropPlr.name} to waivers.`, "info");
+  };
+
+  const confirmRosterCutsComplete = () => {
+    const userRoster = playersByTeam.byTeam[userTeamId] || [];
+    if (userRoster.length > 30) {
+      showToast(`You must trim ${userRoster.length - 30} more player(s) to reach the 30-man limit.`, "error");
+      return;
+    }
+    setPhase("REGULAR_SEASON");
+    setActiveTab("dashboard");
+    showToast(`30-man roster finalized for ${year}!`, "success");
+  };
+
+  // ==========================================================================
+  // TRADE EXECUTION HANDLER
+  // ==========================================================================
+
+  const executeTrade = (partnerTeamId, userPlayerIds, userPickIds, aiPlayerIds, aiPickIds) => {
+    const userRoster = playersByTeam.byTeam[userTeamId] || [];
+    const aiRoster = playersByTeam.byTeam[partnerTeamId] || [];
+
+    const newUserCount = userRoster.length - userPlayerIds.length + aiPlayerIds.length;
+    const newAiCount = aiRoster.length - aiPlayerIds.length + userPlayerIds.length;
+
+    if (newUserCount > 30 || newAiCount > 30) {
+      showToast(`Trade violates 30-man roster limit (Resulting sizes: You ${newUserCount}, ${partnerTeamId} ${newAiCount}). Balance player counts or waive someone first.`, "error");
+      return false;
+    }
+
+    setPlayers((prev) =>
+      prev.map((p) => {
+        if (userPlayerIds.includes(p.id)) return { ...p, teamId: partnerTeamId };
+        if (aiPlayerIds.includes(p.id)) return { ...p, teamId: userTeamId };
+        return p;
+      })
+    );
+
+    setDraftPicks((prev) =>
+      prev.map((pk) => {
+        if (userPickIds.includes(pk.id)) return { ...pk, ownerTeamId: partnerTeamId };
+        if (aiPickIds.includes(pk.id)) return { ...pk, ownerTeamId: userTeamId };
+        return pk;
+      })
+    );
+
+    const uAssets = [
+      ...userPlayerIds.map((id) => players.find((p) => p.id === id)?.name),
+      ...userPickIds.map((id) => {
+        const pk = draftPicks.find((x) => x.id === id);
+        return pk ? `${pk.year} Rd ${pk.round} (${pk.originalTeamId})` : "";
+      }),
+    ].filter(Boolean);
+
+    const aAssets = [
+      ...aiPlayerIds.map((id) => players.find((p) => p.id === id)?.name),
+      ...aiPickIds.map((id) => {
+        const pk = draftPicks.find((x) => x.id === id);
+        return pk ? `${pk.year} Rd ${pk.round} (${pk.originalTeamId})` : "";
+      }),
+    ].filter(Boolean);
+
+    addTransaction(
+      "TRADE",
+      `BLOCKBUSTER: ${userTeamId} receives [${aAssets.join(", ")}] from ${partnerTeamId} for [${uAssets.join(", ")}].`
+    );
+    showToast(`Trade completed with ${teamMap[partnerTeamId]?.city} ${teamMap[partnerTeamId]?.name}!`, "success");
+    return true;
+  };
+
+  // ==========================================================================
+  // RENDER: NEW GAME FRANCHISE SELECTION SCREEN
+  // ==========================================================================
+
+  if (phase === "SETUP") {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-4 sm:p-8">
+        <div className="max-w-7xl mx-auto w-full">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-6 mb-8">
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-500/10 border border-sky-500/30 text-sky-400 text-xs font-semibold tracking-wide uppercase mb-2">
+                <Trophy className="w-3.5 h-3.5" /> Front Office Baseball Simulation
+              </div>
+              <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
+                Diamond Dynasty GM
+              </h1>
+              <p className="text-slate-400 mt-1 max-w-2xl text-sm sm:text-base">
+                Take control of 1 of 32 franchises across 2 Leagues & 6 Divisions. Draft from a 1,344-player pool, manage a 30-man active roster & 384-player waiver wire, trade players and future draft picks, and build a multi-season dynasty.
+              </p>
+            </div>
+            <button
+              onClick={() => startNewFranchise(userTeamId)}
+              className="inline-flex items-center justify-center gap-2.5 px-6 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-slate-950 font-bold text-base shadow-lg shadow-emerald-500/20 transition cursor-pointer shrink-0"
+            >
+              <Play className="w-5 h-5 fill-current" />
+              Start Inaugural Draft as {teamMap[userTeamId]?.city || TEAM_CONFIGS.find(t => t.id === userTeamId)?.city}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {["AL", "NL"].map((lg) => (
+              <div key={lg} className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5">
+                <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-sky-400" />
+                  {lg === "AL" ? "American League (16 Teams)" : "National League (16 Teams)"}
+                </h2>
+                <div className="space-y-4">
+                  {["East", "Central", "West"].map((div) => {
+                    const divTeams = TEAM_CONFIGS.filter((t) => t.league === lg && t.division === div);
+                    return (
+                      <div key={div}>
+                        <div className="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                          {lg} {div} ({divTeams.length} Teams)
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                          {divTeams.map((t) => {
+                            const selected = userTeamId === t.id;
+                            return (
+                              <button
+                                key={t.id}
+                                onClick={() => setUserTeamId(t.id)}
+                                className={`flex items-center gap-2.5 p-2.5 rounded-xl border text-left transition cursor-pointer ${
+                                  selected
+                                    ? "bg-sky-500/15 border-sky-400 ring-2 ring-sky-500/30"
+                                    : "bg-slate-950/70 border-slate-800 hover:border-slate-600"
+                                }`}
+                              >
+                                <TeamBadge team={t} />
+                                <div className="min-w-0">
+                                  <div className="text-xs font-bold text-white truncate">{t.city}</div>
+                                  <div className="text-[11px] text-slate-400 truncate">{t.name}</div>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // RENDER: MAIN FRONT OFFICE SHELL
+  // ==========================================================================
+
+  const userRoster = playersByTeam.byTeam[userTeamId] || [];
+  const waiverPool = playersByTeam.waivers || [];
+  const isDraftPhase = phase === "INAUGURAL_DRAFT" || phase === "ROOKIE_DRAFT";
+
+  const navItems = [
+    { id: "dashboard", label: "Dashboard & Sim", icon: Activity, disabled: isDraftPhase },
+    { id: "roster", label: `My Roster (${userRoster.length}/30)`, icon: Users, disabled: false },
+    { id: "standings", label: "Standings & Leaders", icon: BarChart3, disabled: isDraftPhase },
+    { id: "waivers", label: `Waiver Pool (${waiverPool.length})`, icon: UserPlus, disabled: isDraftPhase },
+    { id: "trades", label: "Trade Center", icon: ArrowLeftRight, disabled: isDraftPhase },
+    { id: "draft", label: isDraftPhase ? "Draft Room (LIVE)" : "Draft Picks & History", icon: ListOrdered, disabled: false },
+    { id: "log", label: "Transactions", icon: FileText, disabled: false },
+  ];
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
+      {/* Top Executive Header */}
+      <header className="bg-slate-900 border-b border-slate-800 sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <TeamBadge team={userTeam} size="lg" />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-white text-base sm:text-lg">
+                  {userTeam?.city} {userTeam?.name}
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                  {userTeam?.league} {userTeam?.division}
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 flex items-center gap-3 mt-0.5">
+                <span className="font-semibold text-sky-400">Season {year}</span>
+                <span>•</span>
+                <span>
+                  Record: <strong className="text-white">{userTeam?.wins}-{userTeam?.losses}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  {phase === "INAUGURAL_DRAFT" && "Inaugural 30-Rd Draft"}
+                  {phase === "ROOKIE_DRAFT" && `${year} Rookie Draft`}
+                  {phase === "ROSTER_CUTS" && "Offseason Roster Cuts"}
+                  {phase === "REGULAR_SEASON" && `Day ${currentDay} / 162`}
+                  {phase === "PLAYOFFS_COMPLETE" && "Offseason / Playoffs Complete"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Action Simulation Controls in Header */}
+          <div className="flex flex-wrap items-center gap-2">
+            {phase === "REGULAR_SEASON" && currentDay < 162 && (
+              <>
+                <button
+                  onClick={() => simulateDays(1)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                >
+                  <Play className="w-3.5 h-3.5 text-emerald-400" /> Sim Game
+                </button>
+                <button
+                  onClick={() => simulateDays(7)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                >
+                  <FastForward className="w-3.5 h-3.5 text-sky-400" /> Sim Week
+                </button>
+                <button
+                  onClick={() => simulateDays(30)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700 transition cursor-pointer"
+                >
+                  <SkipForward className="w-3.5 h-3.5 text-indigo-400" /> Sim Month
+                </button>
+                <button
+                  onClick={() => simulateDays(162 - currentDay)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow transition cursor-pointer"
+                >
+                  <Trophy className="w-3.5 h-3.5" /> Sim Season
+                </button>
+              </>
+            )}
+
+            {phase === "PLAYOFFS_COMPLETE" && (
+              <button
+                onClick={advanceToOffseasonRookieDraft}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow transition cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4" /> Advance to {year + 1} Rookie Draft
+              </button>
+            )}
+
+            {phase === "ROSTER_CUTS" && (
+              <button
+                onClick={confirmRosterCutsComplete}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold shadow transition cursor-pointer"
+              >
+                <Check className="w-4 h-4" /> Finalize 30-Man Roster ({userRoster.length}/30)
+              </button>
+            )}
+
+            <button
+              onClick={() => setPhase("SETUP")}
+              title="Start a New Franchise"
+              className="p-2 rounded-lg bg-slate-800/70 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-700/70 transition cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Navigation Tabs */}
+        <div className="max-w-7xl mx-auto px-4 flex items-center gap-1 overflow-x-auto no-scrollbar border-t border-slate-800/80">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                disabled={item.disabled}
+                onClick={() => setActiveTab(item.id)}
+                className={`flex items-center gap-2 px-3.5 py-2.5 text-xs font-semibold border-b-2 whitespace-nowrap transition cursor-pointer ${
+                  item.disabled
+                    ? "opacity-40 cursor-not-allowed border-transparent text-slate-500"
+                    : active
+                    ? "border-sky-400 text-sky-400 bg-sky-500/5"
+                    : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800/40"
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {item.label}
+              </button>
+            );
+          })}
+        </div>
+      </header>
+
+      {/* Live League News Ticker */}
+      {transactions.length > 0 && (
+        <div className="bg-slate-900/60 border-b border-slate-800/80 py-1.5 px-4">
+          <div className="max-w-7xl mx-auto flex items-center gap-3 text-xs overflow-hidden">
+            <span className="px-2 py-0.5 rounded bg-sky-500/15 text-sky-400 font-bold uppercase tracking-wider text-[10px] shrink-0">
+              MLB Wire
+            </span>
+            <span className="text-slate-300 truncate">{transactions[0].summary}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMsg && (
+        <div className="fixed bottom-5 right-5 z-50 max-w-md bg-slate-900 border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3">
+          <AlertCircle className={`w-5 h-5 shrink-0 ${toastMsg.type === "error" ? "text-rose-400" : toastMsg.type === "warning" ? "text-amber-400" : "text-emerald-400"}`} />
+          <span className="text-xs sm:text-sm font-medium">{toastMsg.text}</span>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+        {activeTab === "dashboard" && (
+          <DashboardView
+            year={year}
+            phase={phase}
+            currentDay={currentDay}
+            userTeam={userTeam}
+            userRoster={userRoster}
+            teams={teams}
+            teamMap={teamMap}
+            recentGames={recentGames}
+            transactions={transactions}
+            playoffResults={playoffResults}
+            championsHistory={championsHistory}
+            draftPicks={draftPicks}
+            onSimDays={simulateDays}
+            onAdvanceOffseason={advanceToOffseasonRookieDraft}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+            onNavigate={setActiveTab}
+          />
+        )}
+
+        {activeTab === "roster" && (
+          <RosterView
+            userTeam={userTeam}
+            userRoster={userRoster}
+            phase={phase}
+            onReleasePlayer={handleReleasePlayer}
+            onConfirmCuts={confirmRosterCutsComplete}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
+        {activeTab === "standings" && (
+          <StandingsAndStatsView
+            teams={teams}
+            players={players}
+            teamMap={teamMap}
+            userTeamId={userTeamId}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
+        {activeTab === "waivers" && (
+          <WaiverPoolView
+            waiverPool={waiverPool}
+            userRoster={userRoster}
+            onClaimAndDrop={handleWaiverClaimAndDrop}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
+        {activeTab === "trades" && (
+          <TradeCenterView
+            year={year}
+            userTeam={userTeam}
+            teams={teams}
+            teamMap={teamMap}
+            playersByTeam={playersByTeam.byTeam}
+            draftPicks={draftPicks}
+            onExecuteTrade={executeTrade}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
+        {activeTab === "draft" && (
+          <DraftRoomView
+            year={year}
+            phase={phase}
+            userTeamId={userTeamId}
+            teamMap={teamMap}
+            teams={teams}
+            draftOrder={draftOrder}
+            currentPickIdx={currentPickIdx}
+            draftPool={draftPool}
+            draftHistory={draftHistory}
+            userRoster={userRoster}
+            draftPicks={draftPicks}
+            onUserPick={handleUserDraftSelect}
+            onSimNext={handleSimNextPick}
+            onSimToUser={handleSimToUserTurn}
+            onAutoDraftAll={handleAutoDraftAll}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
+        {activeTab === "log" && (
+          <TransactionsLogView transactions={transactions} championsHistory={championsHistory} />
+        )}
+      </main>
+
+      {/* Player Modal */}
+      {selectedPlayer && (
+        <PlayerDetailModal
+          player={selectedPlayer}
+          team={selectedPlayer.teamId ? teamMap[selectedPlayer.teamId] : null}
+          onClose={() => setSelectedPlayer(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================================
+// 7. SUB-VIEWS
+// ============================================================================
+
+function DashboardView({
+  year, phase, currentDay, userTeam, userRoster, teams, teamMap,
+  recentGames, transactions, playoffResults, championsHistory, draftPicks,
+  onSimDays, onAdvanceOffseason, onSelectPlayer, onNavigate
+}) {
+  const hitters = userRoster.filter((p) => !p.isPitcher);
+  const pitchers = userRoster.filter((p) => p.isPitcher);
+  const avgHitterOvr = hitters.length ? Math.round(hitters.reduce((s, p) => s + p.ovr, 0) / hitters.length) : 0;
+  const avgPitcherOvr = pitchers.length ? Math.round(pitchers.reduce((s, p) => s + p.ovr, 0) / pitchers.length) : 0;
+  const teamOvr = Math.round((avgHitterOvr + avgPitcherOvr) / 2);
+
+  // Division standings for user's division
+  const divTeams = teams
+    .filter((t) => t.league === userTeam?.league && t.division === userTeam?.division)
+    .sort((a, b) => b.wins - a.wins || (b.runsScored - b.runsAllowed) - (a.runsScored - a.runsAllowed));
+
+  const userPicks = draftPicks.filter((pk) => pk.ownerTeamId === userTeam?.id).sort((a, b) => a.year - b.year || a.round - b.round);
+
+  return (
+    <div className="space-y-6">
+      {/* Playoff Banner if Season Ended */}
+      {phase === "PLAYOFFS_COMPLETE" && playoffResults && (
+        <div className="bg-gradient-to-r from-amber-500/20 via-slate-900 to-emerald-500/20 border border-amber-500/40 rounded-2xl p-6">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <div className="inline-flex items-center gap-2 text-amber-400 text-xs font-bold uppercase tracking-wider mb-1">
+                <Trophy className="w-4 h-4" /> {year} World Series Champions
+              </div>
+              <h2 className="text-2xl font-extrabold text-white flex items-center gap-3">
+                <TeamBadge team={playoffResults.champion} size="lg" />
+                {playoffResults.champion.city} {playoffResults.champion.name}
+                <span className="text-sm font-normal text-slate-300">
+                  def. {playoffResults.runnerUp.city} {playoffResults.runnerUp.name} ({playoffResults.rounds.worldSeries.score})
+                </span>
+              </h2>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 text-xs text-slate-300">
+                <div>
+                  <span className="text-slate-400 font-semibold">ALCS:</span> {playoffResults.rounds.championship[0].winner.id} def. {playoffResults.rounds.championship[0].loser.id} ({playoffResults.rounds.championship[0].score})
+                </div>
+                <div>
+                  <span className="text-slate-400 font-semibold">NLCS:</span> {playoffResults.rounds.championship[1].winner.id} def. {playoffResults.rounds.championship[1].loser.id} ({playoffResults.rounds.championship[1].score})
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={onAdvanceOffseason}
+              className="px-5 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm shadow-lg transition cursor-pointer shrink-0"
+            >
+              Proceed to {year + 1} Offseason & Rookie Draft →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Top KPI Cards */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="text-xs text-slate-400 font-medium">Season Record</div>
+          <div className="text-2xl font-extrabold text-white mt-1">
+            {userTeam?.wins}-{userTeam?.losses}
+          </div>
+          <div className="text-xs text-slate-400 mt-1">
+            Win%: {userTeam && userTeam.wins + userTeam.losses > 0 ? (userTeam.wins / (userTeam.wins + userTeam.losses)).toFixed(3).replace(/^0/, "") : ".000"} • Streak: {userTeam?.streak > 0 ? `W${userTeam.streak}` : userTeam?.streak < 0 ? `L${Math.abs(userTeam.streak)}` : "-"}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="text-xs text-slate-400 font-medium">Franchise Overall</div>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-2xl font-extrabold text-white">{teamOvr}</span>
+            <RatingBadge value={teamOvr} />
+          </div>
+          <div className="text-xs text-slate-400 mt-1">
+            Offense: <span className="text-emerald-400 font-semibold">{avgHitterOvr}</span> • Pitching: <span className="text-sky-400 font-semibold">{avgPitcherOvr}</span>
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="text-xs text-slate-400 font-medium">Run Differential</div>
+          <div className={`text-2xl font-extrabold mt-1 ${(userTeam?.runsScored - userTeam?.runsAllowed) >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+            {(userTeam?.runsScored - userTeam?.runsAllowed) >= 0 ? "+" : ""}
+            {(userTeam?.runsScored || 0) - (userTeam?.runsAllowed || 0)}
+          </div>
+          <div className="text-xs text-slate-400 mt-1">
+            RS: {userTeam?.runsScored} • RA: {userTeam?.runsAllowed}
+          </div>
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+          <div className="text-xs text-slate-400 font-medium">Schedule Progress</div>
+          <div className="text-2xl font-extrabold text-white mt-1">
+            {currentDay} <span className="text-sm font-normal text-slate-400">/ 162</span>
+          </div>
+          <div className="w-full h-1.5 bg-slate-800 rounded-full mt-2 overflow-hidden">
+            <div className="h-full bg-sky-500 rounded-full" style={{ width: `${(currentDay / 162) * 100}%` }} />
+          </div>
+        </div>
+      </div>
+
+      {/* Main 3-Column Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Division Standings */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-amber-400" />
+              {userTeam?.league} {userTeam?.division} Standings
+            </h3>
+            <button onClick={() => onNavigate("standings")} className="text-xs text-sky-400 hover:underline cursor-pointer">
+              Full League →
+            </button>
+          </div>
+          <table className="w-full text-xs">
+            <thead className="text-slate-400 border-b border-slate-800">
+              <tr>
+                <th className="py-2 text-left">Team</th>
+                <th className="py-2 text-right">W</th>
+                <th className="py-2 text-right">L</th>
+                <th className="py-2 text-right">GB</th>
+                <th className="py-2 text-right">DIFF</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70">
+              {divTeams.map((t, idx) => {
+                const leader = divTeams[0];
+                const gb = idx === 0 ? "-" : (((leader.wins - t.wins) + (t.losses - leader.losses)) / 2).toFixed(1);
+                const diff = t.runsScored - t.runsAllowed;
+                return (
+                  <tr key={t.id} className={t.id === userTeam?.id ? "bg-sky-500/10 font-semibold" : ""}>
+                    <td className="py-2 flex items-center gap-2">
+                      <TeamBadge team={t} />
+                      <span className="truncate">{t.city}</span>
+                    </td>
+                    <td className="py-2 text-right font-mono">{t.wins}</td>
+                    <td className="py-2 text-right font-mono">{t.losses}</td>
+                    <td className="py-2 text-right font-mono text-slate-400">{gb}</td>
+                    <td className={`py-2 text-right font-mono ${diff >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                      {diff >= 0 ? `+${diff}` : diff}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+
+          {/* Future Draft Picks Inventory */}
+          <div className="mt-5 pt-4 border-t border-slate-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-300">Owned Draft Capital ({userPicks.length} Picks)</span>
+              <button onClick={() => onNavigate("trades")} className="text-xs text-sky-400 hover:underline cursor-pointer">
+                Trade Picks →
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+              {userPicks.slice(0, 12).map((pk) => (
+                <span
+                  key={pk.id}
+                  className={`px-2 py-0.5 rounded text-[11px] font-mono border ${
+                    pk.originalTeamId !== userTeam?.id
+                      ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+                      : "bg-slate-950 text-slate-300 border-slate-800"
+                  }`}
+                >
+                  {pk.year} R{pk.round} ({pk.originalTeamId})
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Top Performers on Roster */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-white text-sm flex items-center gap-2">
+              <Star className="w-4 h-4 text-sky-400" />
+              Core Roster Stars
+            </h3>
+            <button onClick={() => onNavigate("roster")} className="text-xs text-sky-400 hover:underline cursor-pointer">
+              Full 30-Man →
+            </button>
+          </div>
+          <div className="space-y-2">
+            {userRoster.slice(0, 7).map((p) => {
+              const summaryStat = p.isPitcher
+                ? `${p.seasonStats.w}-${p.seasonStats.l}, ${getPitcherRatios(p.seasonStats).era} ERA, ${p.seasonStats.so} SO`
+                : `${getHitterSlash(p.seasonStats).avg} AVG, ${p.seasonStats.hr} HR, ${p.seasonStats.rbi} RBI`;
+              return (
+                <div
+                  key={p.id}
+                  onClick={() => onSelectPlayer(p)}
+                  className="flex items-center justify-between p-2 rounded-lg bg-slate-950/70 hover:bg-slate-800/80 border border-slate-800/80 cursor-pointer transition"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 w-7 text-center">
+                        {p.position}
+                      </span>
+                      <span className="text-xs font-bold text-white truncate">{p.name}</span>
+                      <span className="text-[11px] text-slate-500">({p.age})</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-0.5 pl-9 font-mono">{summaryStat}</div>
+                  </div>
+                  <RatingBadge value={p.ovr} />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Recent Game Results & League Feed */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+          <div>
+            <h3 className="font-bold text-white text-sm flex items-center gap-2 mb-3">
+              <Calendar className="w-4 h-4 text-emerald-400" />
+              Recent Game Results
+            </h3>
+            {recentGames.length === 0 ? (
+              <div className="text-xs text-slate-500 py-8 text-center border border-dashed border-slate-800 rounded-lg">
+                No games played yet. Use the simulation controls above to start Opening Day!
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-56 overflow-y-auto pr-1">
+                {recentGames.slice(0, 10).map((g, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded bg-slate-950/70 border border-slate-800/70"
+                  >
+                    <span className="text-slate-500 font-mono">Day {g.day}</span>
+                    <span className="font-semibold text-slate-200">
+                      {g.awayId} {g.awayRuns} @ {g.homeId} {g.homeRuns}
+                    </span>
+                    <span
+                      className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${
+                        g.userWon ? "bg-emerald-500/20 text-emerald-400" : "bg-rose-500/20 text-rose-400"
+                      }`}
+                    >
+                      {g.userWon ? "WIN" : "LOSS"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 pt-4 border-t border-slate-800">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-300">Latest Front Office Wire</span>
+              <button onClick={() => onNavigate("log")} className="text-xs text-sky-400 hover:underline cursor-pointer">
+                All Logs →
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {transactions.slice(0, 3).map((tx) => (
+                <div key={tx.id} className="text-[11px] text-slate-400 bg-slate-950/60 p-2 rounded border border-slate-800/60 leading-snug">
+                  {tx.summary}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RosterView({ userTeam, userRoster, phase, onReleasePlayer, onConfirmCuts, onSelectPlayer }) {
+  const [filterType, setFilterType] = useState("ALL"); // ALL | HITTERS | PITCHERS
+  const [sortBy, setSortBy] = useState("ovr");
+
+  const filtered = useMemo(() => {
+    let list = [...userRoster];
+    if (filterType === "HITTERS") list = list.filter((p) => !p.isPitcher);
+    if (filterType === "PITCHERS") list = list.filter((p) => p.isPitcher);
+    list.sort((a, b) => (b[sortBy] || 0) - (a[sortBy] || 0));
+    return list;
+  }, [userRoster, filterType, sortBy]);
+
+  const hitterCount = userRoster.filter((p) => !p.isPitcher).length;
+  const pitcherCount = userRoster.filter((p) => p.isPitcher).length;
+
+  return (
+    <div className="space-y-5">
+      {phase === "ROSTER_CUTS" && (
+        <div className="bg-amber-500/15 border border-amber-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-amber-200">
+            <strong>Offseason Roster Compliance:</strong> Your roster currently has <strong>{userRoster.length}</strong> players. Release {Math.max(0, userRoster.length - 30)} player(s) to the Waiver Pool to reach the 30-man limit.
+          </div>
+          <button
+            onClick={onConfirmCuts}
+            disabled={userRoster.length > 30}
+            className="px-4 py-2 rounded-lg bg-emerald-500 disabled:opacity-40 text-slate-950 font-bold text-xs cursor-pointer"
+          >
+            Confirm 30-Man Roster
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <div>
+          <h2 className="text-lg font-bold text-white">
+            {userTeam?.city} {userTeam?.name} — Active Roster ({userRoster.length}/30)
+          </h2>
+          <p className="text-xs text-slate-400">
+            {hitterCount} Position Players • {pitcherCount} Pitchers • Click any player for full scouting card & career splits
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {["ALL", "HITTERS", "PITCHERS"].map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setFilterType(tab)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                filterType === tab ? "bg-sky-500 text-slate-950" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+              }`}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
+              <tr>
+                <th className="py-3 px-4">Pos</th>
+                <th className="py-3 px-3">Player</th>
+                <th className="py-3 px-2 text-center">Age</th>
+                <th className="py-3 px-2 text-center">B/T</th>
+                <th className="py-3 px-2 text-center cursor-pointer hover:text-white" onClick={() => setSortBy("ovr")}>OVR</th>
+                <th className="py-3 px-2 text-center cursor-pointer hover:text-white" onClick={() => setSortBy("potential")}>POT</th>
+                <th className="py-3 px-3">Ratings (Pow/Spd/Glv or Vel/Ctl/Fin)</th>
+                <th className="py-3 px-3 text-right">Season Stats</th>
+                <th className="py-3 px-4 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/80">
+              {filtered.map((p) => {
+                const statText = p.isPitcher
+                  ? `${p.seasonStats.w}-${p.seasonStats.l} | ${getPitcherRatios(p.seasonStats).era} ERA | ${formatIP(p.seasonStats.ipOuts)} IP | ${p.seasonStats.so} SO | ${p.seasonStats.sv} SV`
+                  : `${getHitterSlash(p.seasonStats).avg}/${getHitterSlash(p.seasonStats).obp}/${getHitterSlash(p.seasonStats).slg} | ${p.seasonStats.hr} HR | ${p.seasonStats.rbi} RBI | ${p.seasonStats.sb} SB`;
+                return (
+                  <tr key={p.id} className="hover:bg-slate-800/40 transition">
+                    <td className="py-2.5 px-4">
+                      <span className="px-2 py-0.5 rounded bg-slate-800 font-bold text-sky-400">{p.position}</span>
+                    </td>
+                    <td className="py-2.5 px-3 font-bold text-white cursor-pointer hover:text-sky-400" onClick={() => onSelectPlayer(p)}>
+                      {p.name}
+                    </td>
+                    <td className="py-2.5 px-2 text-center font-mono text-slate-300">{p.age}</td>
+                    <td className="py-2.5 px-2 text-center font-mono text-slate-400">{p.bats}/{p.throws}</td>
+                    <td className="py-2.5 px-2 text-center"><RatingBadge value={p.ovr} /></td>
+                    <td className="py-2.5 px-2 text-center font-mono text-amber-300">{p.potential}</td>
+                    <td className="py-2.5 px-3 font-mono text-slate-300">
+                      {p.isPitcher
+                        ? `VEL ${p.velocity} • CTL ${p.control} • FIN ${p.finesse}`
+                        : `POW ${p.power} • SPD ${p.speed} • GLV ${p.glove}`}
+                    </td>
+                    <td className="py-2.5 px-3 text-right font-mono text-slate-300">{statText}</td>
+                    <td className="py-2.5 px-4 text-right">
+                      <button
+                        onClick={() => onReleasePlayer(p.id)}
+                        className="px-2.5 py-1 rounded bg-rose-500/15 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 text-[11px] font-semibold transition cursor-pointer"
+                      >
+                        Waive
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StandingsAndStatsView({ teams, players, teamMap, userTeamId, onSelectPlayer }) {
+  const [subTab, setSubTab] = useState("standings"); // standings | hitters | pitchers
+
+  const topHitters = useMemo(() => {
+    return players
+      .filter((p) => !p.isPitcher && p.seasonStats.ab > 0)
+      .sort((a, b) => b.seasonStats.hr - a.seasonStats.hr || b.seasonStats.h - a.seasonStats.h)
+      .slice(0, 30);
+  }, [players]);
+
+  const topPitchers = useMemo(() => {
+    return players
+      .filter((p) => p.isPitcher && p.seasonStats.ipOuts > 0)
+      .sort((a, b) => b.seasonStats.w - a.seasonStats.w || getPitcherRatios(a.seasonStats).rawEra - getPitcherRatios(b.seasonStats).rawEra)
+      .slice(0, 30);
+  }, [players]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-3">
+        {[
+          { id: "standings", label: "32-Team Division Standings" },
+          { id: "hitters", label: "Batting Leaders" },
+          { id: "pitchers", label: "Pitching Leaders" },
+        ].map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setSubTab(t.id)}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition cursor-pointer ${
+              subTab === t.id ? "bg-sky-500 text-slate-950" : "bg-slate-800 text-slate-300 hover:bg-slate-700"
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {subTab === "standings" && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {["AL", "NL"].map((lg) => (
+            <div key={lg} className="space-y-4">
+              <h3 className="text-base font-extrabold text-white px-1">
+                {lg === "AL" ? "American League" : "National League"}
+              </h3>
+              {["East", "Central", "West"].map((div) => {
+                const divTeams = teams
+                  .filter((t) => t.league === lg && t.division === div)
+                  .sort((a, b) => b.wins - a.wins || (b.runsScored - b.runsAllowed) - (a.runsScored - a.runsAllowed));
+                return (
+                  <div key={div} className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+                    <div className="bg-slate-950 px-4 py-2 text-xs font-bold uppercase tracking-wider text-sky-400">
+                      {lg} {div}
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead className="text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="py-2 px-4 text-left">Franchise</th>
+                          <th className="py-2 px-2 text-right">W</th>
+                          <th className="py-2 px-2 text-right">L</th>
+                          <th className="py-2 px-2 text-right">PCT</th>
+                          <th className="py-2 px-2 text-right">GB</th>
+                          <th className="py-2 px-4 text-right">DIFF</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/70">
+                        {divTeams.map((t, idx) => {
+                          const leader = divTeams[0];
+                          const gb = idx === 0 ? "-" : (((leader.wins - t.wins) + (t.losses - leader.losses)) / 2).toFixed(1);
+                          const pct = t.wins + t.losses > 0 ? (t.wins / (t.wins + t.losses)).toFixed(3).replace(/^0/, "") : ".000";
+                          const diff = t.runsScored - t.runsAllowed;
+                          return (
+                            <tr key={t.id} className={t.id === userTeamId ? "bg-sky-500/15 font-bold" : ""}>
+                              <td className="py-2 px-4 flex items-center gap-2">
+                                <TeamBadge team={t} />
+                                <span>{t.city} {t.name}</span>
+                              </td>
+                              <td className="py-2 px-2 text-right font-mono">{t.wins}</td>
+                              <td className="py-2 px-2 text-right font-mono">{t.losses}</td>
+                              <td className="py-2 px-2 text-right font-mono">{pct}</td>
+                              <td className="py-2 px-2 text-right font-mono text-slate-400">{gb}</td>
+                              <td className={`py-2 px-4 text-right font-mono ${diff >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                {diff >= 0 ? `+${diff}` : diff}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {subTab === "hitters" && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+          <table className="w-full text-xs text-right">
+            <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
+              <tr>
+                <th className="py-3 px-4 text-left">Player</th>
+                <th className="py-3 px-2 text-left">Team</th>
+                <th className="py-3 px-2 text-center">Pos</th>
+                <th className="py-3 px-2 text-center">OVR</th>
+                <th className="py-3 px-2">G</th>
+                <th className="py-3 px-2">AB</th>
+                <th className="py-3 px-2">H</th>
+                <th className="py-3 px-2">HR</th>
+                <th className="py-3 px-2">RBI</th>
+                <th className="py-3 px-2">SB</th>
+                <th className="py-3 px-2">AVG</th>
+                <th className="py-3 px-2">OBP</th>
+                <th className="py-3 px-4">SLG</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70 font-mono">
+              {topHitters.map((p) => {
+                const s = getHitterSlash(p.seasonStats);
+                return (
+                  <tr key={p.id} className="hover:bg-slate-800/40">
+                    <td className="py-2.5 px-4 text-left font-sans font-bold text-white cursor-pointer hover:text-sky-400" onClick={() => onSelectPlayer(p)}>
+                      {p.name}
+                    </td>
+                    <td className="py-2.5 px-2 text-left font-sans">{p.teamId || "FA"}</td>
+                    <td className="py-2.5 px-2 text-center font-sans">{p.position}</td>
+                    <td className="py-2.5 px-2 text-center"><RatingBadge value={p.ovr} /></td>
+                    <td className="px-2">{p.seasonStats.g}</td>
+                    <td className="px-2">{p.seasonStats.ab}</td>
+                    <td className="px-2">{p.seasonStats.h}</td>
+                    <td className="px-2 font-bold text-emerald-400">{p.seasonStats.hr}</td>
+                    <td className="px-2">{p.seasonStats.rbi}</td>
+                    <td className="px-2">{p.seasonStats.sb}</td>
+                    <td className="px-2 font-bold text-white">{s.avg}</td>
+                    <td className="px-2">{s.obp}</td>
+                    <td className="px-4">{s.slg}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {subTab === "pitchers" && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+          <table className="w-full text-xs text-right">
+            <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
+              <tr>
+                <th className="py-3 px-4 text-left">Pitcher</th>
+                <th className="py-3 px-2 text-left">Team</th>
+                <th className="py-3 px-2 text-center">Role</th>
+                <th className="py-3 px-2 text-center">OVR</th>
+                <th className="py-3 px-2">G</th>
+                <th className="py-3 px-2">W</th>
+                <th className="py-3 px-2">L</th>
+                <th className="py-3 px-2">SV</th>
+                <th className="py-3 px-2">IP</th>
+                <th className="py-3 px-2">SO</th>
+                <th className="py-3 px-2">BB</th>
+                <th className="py-3 px-2">ERA</th>
+                <th className="py-3 px-4">WHIP</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/70 font-mono">
+              {topPitchers.map((p) => {
+                const r = getPitcherRatios(p.seasonStats);
+                return (
+                  <tr key={p.id} className="hover:bg-slate-800/40">
+                    <td className="py-2.5 px-4 text-left font-sans font-bold text-white cursor-pointer hover:text-sky-400" onClick={() => onSelectPlayer(p)}>
+                      {p.name}
+                    </td>
+                    <td className="py-2.5 px-2 text-left font-sans">{p.teamId || "FA"}</td>
+                    <td className="py-2.5 px-2 text-center font-sans">{p.position}</td>
+                    <td className="py-2.5 px-2 text-center"><RatingBadge value={p.ovr} /></td>
+                    <td className="px-2">{p.seasonStats.g}</td>
+                    <td className="px-2 font-bold text-sky-400">{p.seasonStats.w}</td>
+                    <td className="px-2">{p.seasonStats.l}</td>
+                    <td className="px-2">{p.seasonStats.sv}</td>
+                    <td className="px-2">{r.ipStr}</td>
+                    <td className="px-2">{p.seasonStats.so}</td>
+                    <td className="px-2">{p.seasonStats.bb}</td>
+                    <td className="px-2 font-bold text-white">{r.era}</td>
+                    <td className="px-4">{r.whip}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WaiverPoolView({ waiverPool, userRoster, onClaimAndDrop, onSelectPlayer }) {
+  const [search, setSearch] = useState("");
+  const [posFilter, setPosFilter] = useState("ALL");
+  const [handFilter, setHandFilter] = useState("ALL");
+  const [claimingPlayer, setClaimingPlayer] = useState(null);
+  const [selectedDropId, setSelectedDropId] = useState("");
+
+  const filteredWaivers = useMemo(() => {
+    return waiverPool
+      .filter((p) => {
+        if (search && !p.name.toLowerCase().includes(search.toLowerCase())) return false;
+        if (posFilter === "PITCHERS" && !p.isPitcher) return false;
+        if (posFilter === "HITTERS" && p.isPitcher) return false;
+        if (!["ALL", "PITCHERS", "HITTERS"].includes(posFilter) && p.position !== posFilter) return false;
+        if (handFilter !== "ALL" && p.throws !== handFilter && p.bats !== handFilter) return false;
+        return true;
+      })
+      .slice(0, 120);
+  }, [waiverPool, search, posFilter, handFilter]);
+
+  const openClaimModal = (player) => {
+    setClaimingPlayer(player);
+    const lowest = [...userRoster].sort((a, b) => a.ovr - b.ovr)[0];
+    setSelectedDropId(lowest ? lowest.id : "");
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-lg font-bold text-white">League Waiver Wire & Free Agent Pool ({waiverPool.length})</h2>
+          <p className="text-xs text-slate-400">
+            Claim any available player by simultaneously designating a player from your 30-man roster to waive.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Search player..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-sky-500"
+            />
+          </div>
+
+          <select
+            value={posFilter}
+            onChange={(e) => setPosFilter(e.target.value)}
+            className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white"
+          >
+            <option value="ALL">All Positions</option>
+            <option value="HITTERS">All Hitters</option>
+            <option value="PITCHERS">All Pitchers</option>
+            {["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH", "SP", "RP"].map((pos) => (
+              <option key={pos} value={pos}>{pos}</option>
+            ))}
+          </select>
+
+          <select
+            value={handFilter}
+            onChange={(e) => setHandFilter(e.target.value)}
+            className="px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white"
+          >
+            <option value="ALL">L / R / S</option>
+            <option value="L">Left-Handed (L)</option>
+            <option value="R">Right-Handed (R)</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Waiver Table */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slate-950 text-slate-400 uppercase text-[11px]">
+              <tr>
+                <th className="py-3 px-4">Pos</th>
+                <th className="py-3 px-3">Player</th>
+                <th className="py-3 px-2 text-center">Age</th>
+                <th className="py-3 px-2 text-center">B/T</th>
+                <th className="py-3 px-2 text-center">OVR</th>
+                <th className="py-3 px-2 text-center">POT</th>
+                <th className="py-3 px-3">Scouting Grades</th>
+                <th className="py-3 px-4 text-right">Transaction</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-800/80">
+              {filteredWaivers.map((p) => (
+                <tr key={p.id} className="hover:bg-slate-800/40">
+                  <td className="py-2.5 px-4">
+                    <span className="px-2 py-0.5 rounded bg-slate-800 font-bold text-sky-400">{p.position}</span>
+                  </td>
+                  <td className="py-2.5 px-3 font-bold text-white cursor-pointer hover:text-sky-400" onClick={() => onSelectPlayer(p)}>
+                    {p.name}
+                  </td>
+                  <td className="py-2.5 px-2 text-center font-mono">{p.age}</td>
+                  <td className="py-2.5 px-2 text-center font-mono text-slate-400">{p.bats}/{p.throws}</td>
+                  <td className="py-2.5 px-2 text-center"><RatingBadge value={p.ovr} /></td>
+                  <td className="py-2.5 px-2 text-center font-mono text-amber-300">{p.potential}</td>
+                  <td className="py-2.5 px-3 font-mono text-slate-300">
+                    {p.isPitcher
+                      ? `VEL ${p.velocity} • CTL ${p.control} • FIN ${p.finesse}`
+                      : `POW ${p.power} • SPD ${p.speed} • GLV ${p.glove}`}
+                  </td>
+                  <td className="py-2.5 px-4 text-right">
+                    <button
+                      onClick={() => openClaimModal(p)}
+                      className="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/35 text-emerald-300 border border-emerald-500/40 font-semibold text-xs transition cursor-pointer"
+                    >
+                      Claim Player
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Claim & Simultaneous Drop Modal */}
+      {claimingPlayer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-white">Complete Waiver Claim</h3>
+            <p className="text-xs text-slate-400 mt-1">
+              Claiming <strong className="text-emerald-400">{claimingPlayer.position} {claimingPlayer.name} ({claimingPlayer.ovr} OVR)</strong>.
+              {userRoster.length >= 30
+                ? " Select a player from your 30-man active roster to release:"
+                : " You have an open roster spot."}
+            </p>
+
+            {userRoster.length >= 30 && (
+              <div className="mt-4">
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Player to Waive / Drop</label>
+                <select
+                  value={selectedDropId}
+                  onChange={(e) => setSelectedDropId(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-white"
+                >
+                  {[...userRoster]
+                    .sort((a, b) => a.ovr - b.ovr)
+                    .map((rp) => (
+                      <option key={rp.id} value={rp.id}>
+                        [{rp.position}] {rp.name} — {rp.ovr} OVR (Age {rp.age})
+                      </option>
+                    ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 mt-6">
+              <button
+                onClick={() => setClaimingPlayer(null)}
+                className="px-4 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  onClaimAndDrop(claimingPlayer.id, userRoster.length >= 30 ? selectedDropId : null);
+                  setClaimingPlayer(null);
+                }}
+                className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold cursor-pointer"
+              >
+                Confirm Claim & Move
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TradeCenterView({ year, userTeam, teams, teamMap, playersByTeam, draftPicks, onExecuteTrade, onSelectPlayer }) {
+  const aiTeams = useMemo(() => teams.filter((t) => t.id !== userTeam?.id), [teams, userTeam]);
+  const [partnerId, setPartnerId] = useState(aiTeams[0]?.id || "BOS");
+
+  const [userSelPlayers, setUserSelPlayers] = useState([]);
+  const [userSelPicks, setUserSelPicks] = useState([]);
+  const [aiSelPlayers, setAiSelPlayers] = useState([]);
+  const [aiSelPicks, setAiSelPicks] = useState([]);
+
+  const handleChangePartner = (newId) => {
+    setPartnerId(newId);
+    setAiSelPlayers([]);
+    setAiSelPicks([]);
+  };
+
+  const toggleItem = (list, setList, id) => {
+    if (list.includes(id)) setList(list.filter((x) => x !== id));
+    else if (list.length < 4) setList([...list, id]);
+  };
+
+  const partnerTeam = teamMap[partnerId];
+  const userRoster = playersByTeam[userTeam?.id] || [];
+  const partnerRoster = playersByTeam[partnerId] || [];
+
+  const userPicks = draftPicks
+    .filter((pk) => pk.ownerTeamId === userTeam?.id)
+    .sort((a, b) => a.year - b.year || a.round - b.round);
+  const partnerPicks = draftPicks
+    .filter((pk) => pk.ownerTeamId === partnerId)
+    .sort((a, b) => a.year - b.year || a.round - b.round);
+
+  // Calculate Live Trade Values & AI Evaluation
+  const evaluation = useMemo(() => {
+    const uPlayerVal = userSelPlayers.reduce((sum, id) => {
+      const p = userRoster.find((x) => x.id === id);
+      return sum + (p ? getPlayerTradeValue(p) : 0);
+    }, 0);
+    const uPickVal = userSelPicks.reduce((sum, id) => {
+      const pk = userPicks.find((x) => x.id === id);
+      return sum + (pk ? getDraftPickTradeValue(pk, teams, year) : 0);
+    }, 0);
+
+    const aPlayerVal = aiSelPlayers.reduce((sum, id) => {
+      const p = partnerRoster.find((x) => x.id === id);
+      return sum + (p ? getPlayerTradeValue(p) : 0);
+    }, 0);
+    const aPickVal = aiSelPicks.reduce((sum, id) => {
+      const pk = partnerPicks.find((x) => x.id === id);
+      return sum + (pk ? getDraftPickTradeValue(pk, teams, year) : 0);
+    }, 0);
+
+    const userTotal = uPlayerVal + uPickVal;
+    const aiTotal = aPlayerVal + aPickVal;
+    const hasAssets = userTotal > 0 && aiTotal > 0;
+
+    // AI GM demands at least 94% of outgoing value, plus slight tax if trading away an 84+ OVR star
+    const starTax = aiSelPlayers.some((id) => (partnerRoster.find((p) => p.id === id)?.ovr || 0) >= 84) ? 1.08 : 1.0;
+    const ratio = aiTotal > 0 ? userTotal / (aiTotal * starTax) : 0;
+
+    let status = "EMPTY";
+    let message = "Select players and/or future draft picks on both sides to construct a trade proposal.";
+    if (hasAssets) {
+      if (ratio >= 0.96) {
+        status = "ACCEPT";
+        message = `${partnerTeam?.city} GM: "This deal aligns with our organizational timeline. We accept!"`;
+      } else if (ratio >= 0.82) {
+        status = "CLOSE";
+        message = `${partnerTeam?.city} GM: "We're close, but we need slightly more value—add a mid-round pick or upgrade a prospect."`;
+      } else {
+        status = "REJECT";
+        message = `${partnerTeam?.city} GM: "We cannot justify moving these assets for that return."`;
+      }
+    }
+
+    return { userTotal, aiTotal, ratio, status, message };
+  }, [userSelPlayers, userSelPicks, aiSelPlayers, aiSelPicks, userRoster, partnerRoster, userPicks, partnerPicks, teams, year, partnerTeam]);
+
+  const handlePropose = () => {
+    if (evaluation.status !== "ACCEPT") return;
+    const ok = onExecuteTrade(partnerId, userSelPlayers, userSelPicks, aiSelPlayers, aiSelPicks);
+    if (ok) {
+      setUserSelPlayers([]);
+      setUserSelPicks([]);
+      setAiSelPlayers([]);
+      setAiSelPicks([]);
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      {/* Header & Evaluation Meter */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div>
+            <h2 className="text-lg font-bold text-white flex items-center gap-2">
+              <ArrowLeftRight className="w-5 h-5 text-sky-400" />
+              Front Office Trade Center
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Package up to 4 players and 4 future draft picks per side. Keep resulting rosters at or below 30 players.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400 font-semibold">Trade Partner:</span>
+            <select
+              value={partnerId}
+              onChange={(e) => handleChangePartner(e.target.value)}
+              className="px-3 py-2 rounded-lg bg-slate-950 border border-slate-700 text-xs font-bold text-white"
+            >
+              {aiTeams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.city} {t.name} ({t.wins}-{t.losses})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Live Trade Fairness Meter */}
+        <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
+            <div>
+              <div className="text-[11px] text-slate-400">You Send ({userTeam?.id})</div>
+              <div className="text-lg font-extrabold text-white font-mono">{evaluation.userTotal} pts</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[11px] text-slate-400">You Receive ({partnerId})</div>
+              <div className="text-lg font-extrabold text-sky-400 font-mono">{evaluation.aiTotal} pts</div>
+            </div>
+          </div>
+
+          <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3">
+            <div className="flex justify-between text-[11px] mb-1">
+              <span className="text-slate-400">AI GM Interest Meter</span>
+              <span
+                className={`font-bold ${
+                  evaluation.status === "ACCEPT"
+                    ? "text-emerald-400"
+                    : evaluation.status === "CLOSE"
+                    ? "text-amber-400"
+                    : "text-slate-400"
+                }`}
+              >
+                {evaluation.status}
+              </span>
+            </div>
+            <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full transition-all ${
+                  evaluation.status === "ACCEPT"
+                    ? "bg-emerald-500"
+                    : evaluation.status === "CLOSE"
+                    ? "bg-amber-500"
+                    : "bg-rose-500"
+                }`}
+                style={{ width: `${Math.min(100, Math.round(evaluation.ratio * 85))}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-slate-300 mt-1.5">{evaluation.message}</p>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              disabled={evaluation.status !== "ACCEPT"}
+              onClick={handlePropose}
+              className="w-full lg:w-auto px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs shadow-lg transition cursor-pointer"
+            >
+              Execute Trade Proposal
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Dual Team Asset Selector */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {[
+          {
+            title: `${userTeam?.city} ${userTeam?.name} (Your Assets)`,
+            roster: userRoster,
+            picks: userPicks,
+            selPlayers: userSelPlayers,
+            setSelPlayers: setUserSelPlayers,
+            selPicks: userSelPicks,
+            setSelPicks: setUserSelPicks,
+          },
+          {
+            title: `${partnerTeam?.city} ${partnerTeam?.name} (${partnerId} Assets)`,
+            roster: partnerRoster,
+            picks: partnerPicks,
+            selPlayers: aiSelPlayers,
+            setSelPlayers: setAiSelPlayers,
+            selPicks: aiSelPicks,
+            setSelPicks: setAiSelPicks,
+          },
+        ].map((side, idx) => (
+          <div key={idx} className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-4">
+            <h3 className="font-bold text-white text-sm border-b border-slate-800 pb-2">{side.title}</h3>
+
+            {/* Future Draft Picks */}
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                Future Draft Picks (Click to Include)
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                {side.picks.map((pk) => {
+                  const active = side.selPicks.includes(pk.id);
+                  const val = getDraftPickTradeValue(pk, teams, year);
+                  return (
+                    <button
+                      key={pk.id}
+                      onClick={() => toggleItem(side.selPicks, side.setSelPicks, pk.id)}
+                      className={`px-2.5 py-1 rounded text-[11px] font-mono border transition cursor-pointer ${
+                        active
+                          ? "bg-sky-500 text-slate-950 border-sky-400 font-bold"
+                          : "bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-600"
+                      }`}
+                    >
+                      {pk.year} R{pk.round} ({pk.originalTeamId}) • {val}p
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Active 30-Man Roster */}
+            <div>
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+                Active Roster ({side.roster.length}/30)
+              </div>
+              <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/70 border border-slate-800 rounded-lg">
+                {side.roster.map((p) => {
+                  const active = side.selPlayers.includes(p.id);
+                  const val = getPlayerTradeValue(p);
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => toggleItem(side.selPlayers, side.setSelPlayers, p.id)}
+                      className={`flex items-center justify-between px-3 py-2 text-xs cursor-pointer transition ${
+                        active ? "bg-sky-500/20 text-white" : "hover:bg-slate-800/40"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <input type="checkbox" checked={active} readOnly className="rounded accent-sky-500" />
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 text-sky-400 font-bold text-[10px]">
+                          {p.position}
+                        </span>
+                        <span
+                          className="font-semibold truncate hover:underline"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectPlayer(p);
+                          }}
+                        >
+                          {p.name}
+                        </span>
+                        <span className="text-[11px] text-slate-500">({p.age}y)</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="text-[11px] font-mono text-slate-400">{val}p</span>
+                        <RatingBadge value={p.ovr} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DraftRoomView({
+  year, phase, userTeamId, teamMap, teams, draftOrder, currentPickIdx,
+  draftPool, draftHistory, userRoster, draftPicks,
+  onUserPick, onSimNext, onSimToUser, onAutoDraftAll, onSelectPlayer
+}) {
+  const [posFilter, setPosFilter] = useState("ALL");
+  const isLiveDraft = phase === "INAUGURAL_DRAFT" || phase === "ROOKIE_DRAFT";
+  const currentSlot = draftOrder[currentPickIdx];
+  const isUserTurn = isLiveDraft && currentSlot?.teamId === userTeamId;
+
+  const { counts, totalHitters, totalPitchers } = useMemo(() => getTeamRosterNeeds(userRoster), [userRoster]);
+
+  const visiblePool = useMemo(() => {
+    return draftPool
+      .filter((p) => {
+        if (posFilter === "ALL") return true;
+        if (posFilter === "HITTERS") return !p.isPitcher;
+        if (posFilter === "PITCHERS") return p.isPitcher;
+        return p.position === posFilter;
+      })
+      .slice(0, 120);
+  }, [draftPool, posFilter]);
+
+  if (!isLiveDraft) {
+    // Show Future Draft Capital Overview & Past Draft History
+    return (
+      <div className="space-y-6">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <h2 className="text-lg font-bold text-white mb-1">Future Draft Picks & Recent Draft Log</h2>
+          <p className="text-xs text-slate-400 mb-4">
+            Annual 5-round Rookie Draft order is strictly determined by reverse regular-season standings (worst record picks #1, best picks #32).
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[year + 1, year + 2, year + 3].map((yr) => {
+              const owned = draftPicks.filter((pk) => pk.year === yr && pk.ownerTeamId === userTeamId);
+              return (
+                <div key={yr} className="bg-slate-950 border border-slate-800 rounded-lg p-4">
+                  <div className="text-sm font-bold text-sky-400 mb-2">{yr} Rookie Draft Picks ({owned.length})</div>
+                  <div className="space-y-1.5">
+                    {owned.map((pk) => (
+                      <div key={pk.id} className="text-xs flex justify-between text-slate-300 font-mono">
+                        <span>Round {pk.round}</span>
+                        <span>
+                          {pk.originalTeamId === userTeamId ? "Own Pick" : `via ${pk.originalTeamId}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {draftHistory.length > 0 && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <h3 className="text-sm font-bold text-white mb-3">Most Recent Draft Selections</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 max-h-96 overflow-y-auto">
+              {draftHistory.slice(0, 64).map((h) => (
+                <div key={h.pickNum} className="p-2 rounded bg-slate-950 border border-slate-800 text-xs flex items-center justify-between">
+                  <div className="truncate">
+                    <span className="text-slate-500 font-mono mr-1.5">#{h.pickNum}</span>
+                    <strong className="text-sky-400 mr-1.5">{h.teamId}</strong>
+                    <span className="text-white font-semibold">{h.player.name}</span>
+                  </div>
+                  <RatingBadge value={h.player.ovr} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      {/* Live Draft Clock Header */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold uppercase mb-1.5">
+              {phase === "INAUGURAL_DRAFT" ? "30-Round Inaugural Fantasy Draft" : `${year} 5-Round Rookie Prospect Draft`}
+            </div>
+            <h2 className="text-xl font-extrabold text-white flex items-center gap-2.5">
+              On the Clock:
+              {currentSlot && (
+                <>
+                  <TeamBadge team={teamMap[currentSlot.teamId]} size="lg" />
+                  <span>
+                    {teamMap[currentSlot.teamId]?.city} {teamMap[currentSlot.teamId]?.name}
+                  </span>
+                  <span className="text-sm font-mono text-slate-400">
+                    (Round {currentSlot.round}, Pick #{currentSlot.pickNum} of {draftOrder.length})
+                  </span>
+                </>
+              )}
+            </h2>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={onSimNext}
+              className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700 cursor-pointer"
+            >
+              Sim Next Pick
+            </button>
+            <button
+              onClick={onSimToUser}
+              className="px-3.5 py-2 rounded-lg bg-sky-500 hover:bg-sky-400 text-slate-950 text-xs font-bold cursor-pointer"
+            >
+              Sim to My Turn
+            </button>
+            <button
+              onClick={onAutoDraftAll}
+              className="px-3.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer"
+            >
+              Auto-Draft Rest of Draft
+            </button>
+          </div>
+        </div>
+
+        {/* User Positional Needs Tracker */}
+        <div className="mt-4 pt-3 border-t border-slate-800 flex flex-wrap items-center gap-2 text-xs">
+          <span className="font-bold text-slate-300 mr-1">
+            Your Roster ({userRoster.length}/30 • {totalHitters}H / {totalPitchers}P):
+          </span>
+          {["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH", "SP", "RP"].map((pos) => (
+            <span
+              key={pos}
+              className={`px-2 py-0.5 rounded font-mono border ${
+                (counts[pos] || 0) === 0
+                  ? "bg-rose-500/15 text-rose-300 border-rose-500/30"
+                  : "bg-slate-950 text-slate-300 border-slate-800"
+              }`}
+            >
+              {pos}: {counts[pos] || 0}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Main Draft Board & Recent Picks */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+          <div className="p-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="font-bold text-white text-sm">
+              Available Draft Pool ({draftPool.length} Remaining)
+            </h3>
+            <div className="flex flex-wrap gap-1">
+              {["ALL", "HITTERS", "PITCHERS", "C", "1B", "2B", "3B", "SS", "OF", "SP", "RP"].map((f) => {
+                if (f === "OF") return null;
+                return (
+                  <button
+                    key={f}
+                    onClick={() => setPosFilter(f)}
+                    className={`px-2 py-1 rounded text-[11px] font-semibold cursor-pointer ${
+                      posFilter === f ? "bg-sky-500 text-slate-950" : "bg-slate-800 text-slate-300"
+                    }`}
+                  >
+                    {f}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto max-h-[540px] overflow-y-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-950 text-slate-400 sticky top-0">
+                <tr>
+                  <th className="py-2.5 px-3">Pos</th>
+                  <th className="py-2.5 px-3">Player</th>
+                  <th className="py-2.5 px-2 text-center">Age</th>
+                  <th className="py-2.5 px-2 text-center">B/T</th>
+                  <th className="py-2.5 px-2 text-center">OVR</th>
+                  <th className="py-2.5 px-2 text-center">POT</th>
+                  <th className="py-2.5 px-3">Attributes</th>
+                  <th className="py-2.5 px-3 text-right">Draft</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/80">
+                {visiblePool.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-800/40">
+                    <td className="py-2 px-3">
+                      <span className="px-1.5 py-0.5 rounded bg-slate-800 font-bold text-sky-400">{p.position}</span>
+                    </td>
+                    <td
+                      className="py-2 px-3 font-bold text-white cursor-pointer hover:text-sky-400"
+                      onClick={() => onSelectPlayer(p)}
+                    >
+                      {p.name}
+                    </td>
+                    <td className="py-2 px-2 text-center font-mono">{p.age}</td>
+                    <td className="py-2 px-2 text-center font-mono text-slate-400">{p.bats}/{p.throws}</td>
+                    <td className="py-2 px-2 text-center"><RatingBadge value={p.ovr} /></td>
+                    <td className="py-2 px-2 text-center font-mono text-amber-300">{p.potential}</td>
+                    <td className="py-2 px-3 font-mono text-slate-300">
+                      {p.isPitcher
+                        ? `VEL ${p.velocity} • CTL ${p.control} • FIN ${p.finesse}`
+                        : `POW ${p.power} • SPD ${p.speed} • GLV ${p.glove}`}
+                    </td>
+                    <td className="py-2 px-3 text-right">
+                      <button
+                        disabled={!isUserTurn}
+                        onClick={() => onUserPick(p.id)}
+                        className="px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-400 disabled:opacity-30 disabled:cursor-not-allowed text-slate-950 font-bold text-[11px] cursor-pointer"
+                      >
+                        Draft
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Live Pick Feed */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col">
+          <h3 className="font-bold text-white text-sm mb-3">Draft Ticker</h3>
+          <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
+            {draftHistory.length === 0 ? (
+              <div className="text-xs text-slate-500 text-center py-8">Waiting for Pick #1...</div>
+            ) : (
+              draftHistory.slice(0, 60).map((entry) => (
+                <div
+                  key={entry.pickNum}
+                  className={`p-2.5 rounded-lg border text-xs flex items-center justify-between ${
+                    entry.teamId === userTeamId
+                      ? "bg-sky-500/15 border-sky-500/40"
+                      : "bg-slate-950/70 border-slate-800"
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-slate-400 font-mono">
+                      Rd {entry.round} • Pick #{entry.pickNum} • <strong className="text-white">{entry.teamId}</strong>
+                    </div>
+                    <div className="font-bold text-slate-100 truncate mt-0.5">
+                      [{entry.player.position}] {entry.player.name} <span className="text-slate-400 font-normal">({entry.player.age}y)</span>
+                    </div>
+                  </div>
+                  <RatingBadge value={entry.player.ovr} />
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TransactionsLogView({ transactions, championsHistory }) {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h2 className="text-lg font-bold text-white mb-4">Front Office Transactions & League Wire</h2>
+        <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+          {transactions.map((tx) => (
+            <div key={tx.id} className="p-3 rounded-lg bg-slate-950/80 border border-slate-800 flex items-start gap-3 text-xs">
+              <span className="px-2 py-0.5 rounded bg-slate-800 text-sky-400 font-bold text-[10px] shrink-0 mt-0.5">
+                {tx.category}
+              </span>
+              <div className="flex-1 text-slate-200 leading-relaxed">{tx.summary}</div>
+              <span className="text-slate-500 font-mono text-[11px] shrink-0">
+                {tx.year} D{tx.day}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+          <Trophy className="w-5 h-5 text-amber-400" />
+          World Series Champions
+        </h2>
+        {championsHistory.length === 0 ? (
+          <div className="text-xs text-slate-500 text-center py-8 border border-dashed border-slate-800 rounded-lg">
+            Complete Season 1 (162 Games) to crown your first World Series Champion.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {championsHistory.map((c) => (
+              <div key={c.year} className="p-3 rounded-lg bg-slate-950 border border-amber-500/30">
+                <div className="text-xs font-bold text-amber-400">{c.year} World Series</div>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <TeamBadge team={c.champion} />
+                  <span className="text-sm font-extrabold text-white">
+                    {c.champion.city} {c.champion.name}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 mt-1">
+                  Defeated {c.runnerUp.city} {c.runnerUp.name} ({c.score})
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+```

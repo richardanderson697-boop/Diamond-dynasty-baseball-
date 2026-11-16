@@ -1,0 +1,517 @@
+{
+  "entities": {
+    "Franchise": {
+      "title": "Franchise",
+      "description": "Root franchise state including league teams, current season metadata, recent games, and transaction wire.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the franchise owner."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Display name of the saved dynasty franchise."
+        },
+        "userTeamId": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 10,
+          "pattern": "^[A-Z0-9]+$",
+          "description": "Abbreviation ID of the user-controlled team."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Current baseball season year."
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "SETUP",
+            "INAUGURAL_DRAFT",
+            "REGULAR_SEASON",
+            "PLAYOFFS_COMPLETE",
+            "ROOKIE_DRAFT",
+            "ROSTER_CUTS"
+          ],
+          "description": "Current lifecycle phase of the franchise."
+        },
+        "currentDay": {
+          "type": "integer",
+          "description": "Current game day in the 162-game regular season."
+        },
+        "currentPickIdx": {
+          "type": "integer",
+          "description": "Current pick index during an active draft."
+        },
+        "teams": {
+          "type": "array",
+          "description": "Array of the 32 league franchise team standings objects (max 32)."
+        },
+        "championsHistory": {
+          "type": "array",
+          "description": "Historical World Series champions list (max 100)."
+        },
+        "transactions": {
+          "type": "array",
+          "description": "Recent league wire transactions (max 150)."
+        },
+        "recentGames": {
+          "type": "array",
+          "description": "Recent user team game box results (max 50)."
+        },
+        "playoffResults": {
+          "type": "object",
+          "description": "Completed playoff bracket summary for the current season."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when franchise was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last franchise update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "name",
+        "userTeamId",
+        "year",
+        "phase",
+        "currentDay",
+        "currentPickIdx",
+        "teams",
+        "championsHistory",
+        "transactions",
+        "recentGames",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FranchiseStateChunk": {
+      "title": "FranchiseStateChunk",
+      "description": "Partitioned player pool, schedule, or draft state chunk belonging to a franchise.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the franchise owner."
+        },
+        "franchiseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent franchise document ID."
+        },
+        "chunkType": {
+          "type": "string",
+          "enum": ["PLAYERS", "DRAFT_AND_SCHEDULE"],
+          "description": "Kind of partitioned state stored in this chunk."
+        },
+        "items": {
+          "type": "array",
+          "description": "Bounded list of player objects or schedule/draft entries (max 500)."
+        },
+        "draftPicks": {
+          "type": "array",
+          "description": "Future 3-year draft picks ownership list (max 500)."
+        },
+        "draftOrder": {
+          "type": "array",
+          "description": "Active draft slot order (max 1000)."
+        },
+        "draftHistory": {
+          "type": "array",
+          "description": "Completed picks in the active draft (max 1000)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when chunk was updated."
+        }
+      },
+      "required": ["ownerId", "franchiseId", "chunkType", "items", "updatedAt"]
+    },
+    "SavedPlayerCard": {
+      "title": "SavedPlayerCard",
+      "description": "Saved or custom-created baseball player card with scouting ratings, visuals, and historical stats.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the card creator/owner."
+        },
+        "franchiseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent franchise document ID."
+        },
+        "playerId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Linked player identifier in the league universe."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Player full name."
+        },
+        "age": {
+          "type": "integer",
+          "description": "Player age."
+        },
+        "bats": {
+          "type": "string",
+          "enum": ["L", "R", "S"],
+          "description": "Batting handedness."
+        },
+        "throws": {
+          "type": "string",
+          "enum": ["L", "R"],
+          "description": "Throwing handedness."
+        },
+        "isPitcher": {
+          "type": "boolean",
+          "description": "Whether the player is a pitcher."
+        },
+        "position": {
+          "type": "string",
+          "enum": ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF", "DH", "SP", "RP"],
+          "description": "Primary field position."
+        },
+        "teamId": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Assigned team abbreviation or FA."
+        },
+        "ovr": {
+          "type": "integer",
+          "description": "Calculated overall rating (20-99)."
+        },
+        "potential": {
+          "type": "integer",
+          "description": "Scouting ceiling potential (20-99)."
+        },
+        "power": {
+          "type": "integer",
+          "description": "Hitter power attribute."
+        },
+        "speed": {
+          "type": "integer",
+          "description": "Hitter speed attribute."
+        },
+        "glove": {
+          "type": "integer",
+          "description": "Hitter fielding glove attribute."
+        },
+        "velocity": {
+          "type": "integer",
+          "description": "Pitcher velocity attribute."
+        },
+        "control": {
+          "type": "integer",
+          "description": "Pitcher control attribute."
+        },
+        "finesse": {
+          "type": "integer",
+          "description": "Pitcher finesse attribute."
+        },
+        "cardTheme": {
+          "type": "string",
+          "enum": ["CHROME", "GOLD", "EMERALD", "OBSIDIAN"],
+          "description": "Visual finish style of the player card."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Front office scouting report or bio notes."
+        },
+        "isCustom": {
+          "type": "boolean",
+          "description": "True if created in the custom player card studio."
+        },
+        "seasonStats": {
+          "type": "object",
+          "description": "Current season box-score statistics map."
+        },
+        "careerStats": {
+          "type": "object",
+          "description": "Accumulated career statistics map."
+        },
+        "seasonHistory": {
+          "type": "array",
+          "description": "Year-by-year historical season stat snapshots (max 30)."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the card was saved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the card was updated."
+        }
+      },
+      "required": [
+        "ownerId",
+        "franchiseId",
+        "playerId",
+        "name",
+        "age",
+        "bats",
+        "throws",
+        "isPitcher",
+        "position",
+        "teamId",
+        "ovr",
+        "potential",
+        "cardTheme",
+        "notes",
+        "isCustom",
+        "seasonStats",
+        "careerStats",
+        "seasonHistory",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SeasonSnapshot": {
+      "title": "SeasonSnapshot",
+      "description": "Checkpoint or end-of-season snapshot capturing team win percentage, run differential, division standings, and league leaders for historical trends.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "franchiseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent franchise document ID."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Season year."
+        },
+        "day": {
+          "type": "integer",
+          "description": "Game day checkpoint (1-162)."
+        },
+        "isSeasonEnd": {
+          "type": "boolean",
+          "description": "Whether this snapshot marks a completed season."
+        },
+        "userTeamId": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "User team abbreviation."
+        },
+        "userWins": {
+          "type": "integer",
+          "description": "User team wins at checkpoint."
+        },
+        "userLosses": {
+          "type": "integer",
+          "description": "User team losses at checkpoint."
+        },
+        "userWinPct": {
+          "type": "number",
+          "description": "User team win percentage (0.0 to 1.0)."
+        },
+        "userRunDiff": {
+          "type": "integer",
+          "description": "User team cumulative run differential."
+        },
+        "divisionLeaderWinPct": {
+          "type": "number",
+          "description": "Division leader win percentage at checkpoint."
+        },
+        "divisionRank": {
+          "type": "integer",
+          "description": "User team rank in their division (1-6)."
+        },
+        "leagueRank": {
+          "type": "integer",
+          "description": "User team rank in their league (1-16)."
+        },
+        "divisionSnapshots": {
+          "type": "array",
+          "description": "Summary winPct for each team in the user's division (max 6)."
+        },
+        "topHrLeader": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Summary of league HR leader at checkpoint."
+        },
+        "topEraLeader": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Summary of league ERA leader at checkpoint."
+        },
+        "championTeamId": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "World Series champion ID if season complete."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when snapshot was recorded."
+        }
+      },
+      "required": [
+        "ownerId",
+        "franchiseId",
+        "year",
+        "day",
+        "isSeasonEnd",
+        "userTeamId",
+        "userWins",
+        "userLosses",
+        "userWinPct",
+        "userRunDiff",
+        "divisionLeaderWinPct",
+        "divisionRank",
+        "leagueRank",
+        "divisionSnapshots",
+        "topHrLeader",
+        "topEraLeader",
+        "createdAt"
+      ]
+    },
+    "LeagueRecord": {
+      "title": "LeagueRecord",
+      "description": "Tracked single-season or all-time division and league benchmark record.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the owner."
+        },
+        "franchiseId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Parent franchise document ID."
+        },
+        "recordKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Unique key identifying the record category."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["LEAGUE", "AL", "NL", "DIVISION"],
+          "description": "Scope of the record."
+        },
+        "scopeLabel": {
+          "type": "string",
+          "maxLength": 40,
+          "description": "Human-readable division or league label."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["TEAM", "BATTING", "PITCHING"],
+          "description": "Record category."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Record title (e.g. Most Single-Season Home Runs)."
+        },
+        "holderName": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Player or team holding the record."
+        },
+        "teamId": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "Team abbreviation associated with the record."
+        },
+        "value": {
+          "type": "number",
+          "description": "Numeric record value."
+        },
+        "displayValue": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Formatted record display string."
+        },
+        "year": {
+          "type": "integer",
+          "description": "Season year when the record was set."
+        },
+        "day": {
+          "type": "integer",
+          "description": "Game day when the record was achieved."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last record update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "franchiseId",
+        "recordKey",
+        "scope",
+        "scopeLabel",
+        "category",
+        "title",
+        "holderName",
+        "teamId",
+        "value",
+        "displayValue",
+        "year",
+        "day",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/franchises/{franchiseId}": {
+      "schema": { "$ref": "#/entities/Franchise" },
+      "description": "Stores saved baseball dynasty franchises owned by authenticated users."
+    },
+    "/franchises/{franchiseId}/stateChunks/{chunkId}": {
+      "schema": { "$ref": "#/entities/FranchiseStateChunk" },
+      "description": "Stores partitioned 1,344-player rosters, draft order, and 162-game schedule for a franchise."
+    },
+    "/franchises/{franchiseId}/savedPlayers/{cardId}": {
+      "schema": { "$ref": "#/entities/SavedPlayerCard" },
+      "description": "Stores saved and custom-created player cards with dynamic scouting attributes and stat histories."
+    },
+    "/franchises/{franchiseId}/seasonSnapshots/{snapshotId}": {
+      "schema": { "$ref": "#/entities/SeasonSnapshot" },
+      "description": "Stores historical performance trend checkpoints across game days and seasons."
+    },
+    "/franchises/{franchiseId}/records/{recordId}": {
+      "schema": { "$ref": "#/entities/LeagueRecord" },
+      "description": "Stores division and league single-season and franchise records updated as games progress."
+    }
+  }
+}

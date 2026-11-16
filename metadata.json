@@ -1,0 +1,6 @@
+{
+  "name": "Diamond Dynasty GM",
+  "description": "Real-time Firebase-backed baseball front office simulation with dynamic player cards, division & league leaderboards, record books, and historical performance trend analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
