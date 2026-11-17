@@ -1,16 +1,178 @@
 import {
   DraftPick,
+  DraftSlot,
   DivisionSnapshotTeam,
   HitterPosition,
   LeagueRecord,
   Player,
   PlayerPosition,
   PlayoffResults,
+  RetiredPlayerSummary,
   SeasonSnapshot,
   SeriesResult,
   Team,
 } from '../types/baseball';
 import { getStadiumByTeamId } from '../data/stadiums';
+
+export const HARD_SALARY_CAP = 180.0;
+export const SALARY_FLOOR = 90.0;
+export const MIN_PLAYER_SALARY = 0.75;
+export const AI_CAP_RELIEF_THRESHOLD = 155.0;
+export const ROOKIE_CONTRACT_YEARS = 3;
+
+export function roundMoney(val: number): number {
+  if (!Number.isFinite(val)) return MIN_PLAYER_SALARY;
+  return Math.round(val * 100) / 100;
+}
+
+export function formatMoney(val: number): string {
+  const safe = Number.isFinite(val) ? val : 0;
+  return `$${safe.toFixed(2)}M`;
+}
+
+export function getRookieContractSalary(round: number): number {
+  if (round === 1) return 3.5;
+  if (round === 2) return 1.75;
+  return MIN_PLAYER_SALARY;
+}
+
+export function calculateFairSalary(
+  ovr: number,
+  age: number,
+  potential: number,
+  isRookie = false
+): number {
+  if (isRookie) return MIN_PLAYER_SALARY;
+  const safeOvr = Number.isFinite(ovr) ? ovr : 55;
+  const safeAge = Number.isFinite(age) ? age : 27;
+  const safePot = Number.isFinite(potential) ? potential : safeOvr;
+
+  if (safeOvr <= 57) {
+    return MIN_PLAYER_SALARY;
+  }
+
+  const t = safeOvr - 57;
+  let salary = MIN_PLAYER_SALARY + Math.pow(t, 1.72) * 0.056;
+
+  // Youth pre-arbitration discount vs prime/upside premium
+  if (safeAge <= 22 && safeOvr < 72) {
+    salary *= 0.72;
+  } else if (safeAge <= 24 && safePot >= 80 && safeOvr < 76) {
+    salary *= 0.85;
+  } else if (safeAge >= 35) {
+    salary *= 0.84;
+  }
+
+  return roundMoney(Math.max(MIN_PLAYER_SALARY, Math.min(34.0, salary)));
+}
+
+function hashIdToInt(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (h * 31 + id.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+export function getPlayerSalary(
+  player: Pick<Player, 'salary' | 'ovr' | 'age' | 'potential'>
+): number {
+  if (
+    typeof player.salary === 'number' &&
+    Number.isFinite(player.salary) &&
+    player.salary >= MIN_PLAYER_SALARY
+  ) {
+    return roundMoney(player.salary);
+  }
+  return calculateFairSalary(player.ovr ?? 55, player.age ?? 27, player.potential ?? 60);
+}
+
+export function getPlayerContractYears(player: Pick<Player, 'contractYears' | 'id'>): number {
+  if (
+    typeof player.contractYears === 'number' &&
+    Number.isFinite(player.contractYears) &&
+    player.contractYears >= 1
+  ) {
+    return Math.min(5, Math.max(1, Math.round(player.contractYears)));
+  }
+  return (hashIdToInt(player.id || 'plr') % 4) + 1;
+}
+
+export function getTeamDeadCap(team: Pick<Team, 'deadCap'> | undefined): number {
+  if (typeof team?.deadCap === 'number' && Number.isFinite(team.deadCap) && team.deadCap > 0) {
+    return roundMoney(team.deadCap);
+  }
+  return 0;
+}
+
+export interface TeamPayrollSummary {
+  activePayroll: number;
+  deadCap: number;
+  totalPayroll: number;
+  capSpace: number;
+  floorShortfall: number;
+  underFloor: boolean;
+  overCap: boolean;
+  overReliefThreshold: boolean;
+}
+
+export function getTeamPayrollSummary(
+  team: Team | undefined,
+  roster: Player[]
+): TeamPayrollSummary {
+  const activePayroll = roundMoney(roster.reduce((sum, p) => sum + getPlayerSalary(p), 0));
+  const deadCap = getTeamDeadCap(team);
+  const totalPayroll = roundMoney(activePayroll + deadCap);
+  const capSpace = roundMoney(HARD_SALARY_CAP - totalPayroll);
+  const floorShortfall = roundMoney(Math.max(0, SALARY_FLOOR - totalPayroll));
+  return {
+    activePayroll,
+    deadCap,
+    totalPayroll,
+    capSpace,
+    floorShortfall,
+    underFloor: totalPayroll < SALARY_FLOOR,
+    overCap: totalPayroll > HARD_SALARY_CAP,
+    overReliefThreshold: totalPayroll > AI_CAP_RELIEF_THRESHOLD,
+  };
+}
+
+export function computeReleaseDeadCap(player: Player): number {
+  const years = getPlayerContractYears(player);
+  if (years <= 1) return 0;
+  return roundMoney(getPlayerSalary(player) * years * 0.5);
+}
+
+export function calculateExtensionOffer(
+  player: Player,
+  years: number
+): { salary: number; years: number } {
+  const safeYears = Math.min(5, Math.max(1, Math.round(years)));
+  const fair = calculateFairSalary(player.ovr, player.age, player.potential);
+  // Longer commitment gives slight AAV stability/discount for team, or modest bump for prime stars
+  const termMult =
+    safeYears === 1 ? 1.06 : safeYears === 2 ? 1.02 : safeYears === 3 ? 0.98 : safeYears === 4 ? 0.95 : 0.92;
+  return {
+    salary: roundMoney(Math.max(MIN_PLAYER_SALARY, fair * termMult)),
+    years: safeYears,
+  };
+}
+
+export function normalizeLoadedTeams(teams: Team[]): Team[] {
+  return (teams || []).map((t) => ({
+    ...t,
+    deadCap: getTeamDeadCap(t),
+  }));
+}
+
+export function normalizeLoadedPlayers(players: Player[]): Player[] {
+  return (players || []).map((p) => ({
+    ...p,
+    salary: getPlayerSalary(p),
+    contractYears: getPlayerContractYears(p),
+    previousTeamId: p.previousTeamId ?? null,
+  }));
+}
 
 export const FIRST_NAMES = [
   'Marcus', 'Jalen', 'Bryce', 'Shohei', 'Mookie', 'Freddie', 'Gerrit', 'Corbin',
@@ -249,6 +411,20 @@ export function generatePlayer(options: {
   }
 
   player.ovr = calculateOverall(player);
+  player.salary = calculateFairSalary(player.ovr, player.age, player.potential, isRookie);
+  if (isRookie) {
+    player.contractYears = ROOKIE_CONTRACT_YEARS;
+  } else {
+    // Weighted 1-5 year contracts: stars/prime get longer deals, older/fringe skew shorter
+    const r = Math.random();
+    if (player.ovr >= 78 && age <= 30) {
+      player.contractYears = r < 0.2 ? 2 : r < 0.5 ? 3 : r < 0.8 ? 4 : 5;
+    } else if (age >= 33 || player.ovr < 56) {
+      player.contractYears = r < 0.55 ? 1 : r < 0.85 ? 2 : 3;
+    } else {
+      player.contractYears = r < 0.28 ? 1 : r < 0.58 ? 2 : r < 0.82 ? 3 : r < 0.94 ? 4 : 5;
+    }
+  }
   return player;
 }
 
@@ -302,6 +478,7 @@ export function createInitialLeague(startYear = 2026): { teams: Team[]; draftPic
     streak: 0,
     last10: [],
     championships: 0,
+    deadCap: 0,
   }));
 
   const draftPicks: DraftPick[] = [];
@@ -390,7 +567,22 @@ export function getPlayerTradeValue(player: Player): number {
   else if (player.age <= 33) ageMult = 0.72;
   else ageMult = 0.48;
 
-  return Math.round((ovrFactor * 0.45 + potBonus) * ageMult);
+  const baseTalentPts = (ovrFactor * 0.45 + potBonus) * ageMult;
+  const salary = getPlayerSalary(player);
+  const years = getPlayerContractYears(player);
+
+  // Surplus value for cheap multi-year rookie/team-controlled contracts
+  let contractAdj = 0;
+  if (years >= 2 && salary <= 3.5) {
+    contractAdj += (4.0 - salary) * years * 12;
+  } else {
+    const fair = calculateFairSalary(player.ovr, player.age, player.potential);
+    if (salary > fair * 1.3 && years >= 2) {
+      contractAdj -= (salary - fair) * years * 3.2;
+    }
+  }
+
+  return Math.max(10, Math.round(baseTalentPts + contractAdj));
 }
 
 export function getDraftPickTradeValue(pick: DraftPick, teams: Team[], currentYear: number): number {
@@ -406,6 +598,165 @@ export function getDraftPickTradeValue(pick: DraftPick, teams: Team[], currentYe
   return Math.round(roundBase * slotMult * yearDiscount);
 }
 
+export interface TradeEvaluationResult {
+  userBasePts: number;
+  aiBasePts: number;
+  userOfferScoreForAI: number;
+  aiOfferScoreForUser: number;
+  ratio: number;
+  status: 'EMPTY' | 'ACCEPT' | 'CLOSE' | 'REJECT' | 'BLOCKED';
+  capBlocked: boolean;
+  rosterBlocked: boolean;
+  capBlockReason: string | null;
+  message: string;
+  aiReasons: string[];
+  userPreSummary: TeamPayrollSummary;
+  partnerPreSummary: TeamPayrollSummary;
+  userPostPayroll: number;
+  partnerPostPayroll: number;
+}
+
+export function evaluateTradeProposal(params: {
+  userTeam: Team | undefined;
+  partnerTeam: Team | undefined;
+  userRoster: Player[];
+  partnerRoster: Player[];
+  userSendPlayers: Player[];
+  userSendPicks: DraftPick[];
+  aiSendPlayers: Player[];
+  aiSendPicks: DraftPick[];
+  teams: Team[];
+  year: number;
+}): TradeEvaluationResult {
+  const {
+    userTeam,
+    partnerTeam,
+    userRoster,
+    partnerRoster,
+    userSendPlayers,
+    userSendPicks,
+    aiSendPlayers,
+    aiSendPicks,
+    teams,
+    year,
+  } = params;
+
+  const userPreSummary = getTeamPayrollSummary(userTeam, userRoster);
+  const partnerPreSummary = getTeamPayrollSummary(partnerTeam, partnerRoster);
+
+  const userOutSalary = roundMoney(userSendPlayers.reduce((s, p) => s + getPlayerSalary(p), 0));
+  const aiOutSalary = roundMoney(aiSendPlayers.reduce((s, p) => s + getPlayerSalary(p), 0));
+
+  const userPostPayroll = roundMoney(userPreSummary.totalPayroll - userOutSalary + aiOutSalary);
+  const partnerPostPayroll = roundMoney(partnerPreSummary.totalPayroll - aiOutSalary + userOutSalary);
+
+  const userNewCount = userRoster.length - userSendPlayers.length + aiSendPlayers.length;
+  const partnerNewCount = partnerRoster.length - aiSendPlayers.length + userSendPlayers.length;
+
+  const userBasePts =
+    userSendPlayers.reduce((s, p) => s + getPlayerTradeValue(p), 0) +
+    userSendPicks.reduce((s, pk) => s + getDraftPickTradeValue(pk, teams, year), 0);
+  const aiBasePts =
+    aiSendPlayers.reduce((s, p) => s + getPlayerTradeValue(p), 0) +
+    aiSendPicks.reduce((s, pk) => s + getDraftPickTradeValue(pk, teams, year), 0);
+
+  const hasAssets = userBasePts > 0 && aiBasePts > 0;
+  const aiReasons: string[] = [];
+
+  // AI Cap-Awareness & Rookie Value Adjustments
+  let aiCapBonus = 0;
+  const partnerOverRelief = partnerPreSummary.totalPayroll > AI_CAP_RELIEF_THRESHOLD;
+  if (partnerOverRelief) {
+    const netSalaryShed = roundMoney(aiOutSalary - userOutSalary);
+    if (netSalaryShed > 0) {
+      aiCapBonus += Math.round(netSalaryShed * 14);
+      aiReasons.push(
+        `AI > $${AI_CAP_RELIEF_THRESHOLD.toFixed(0)}M payroll: values $${netSalaryShed.toFixed(2)}M immediate cap relief`
+      );
+    } else if (netSalaryShed < -2) {
+      aiCapBonus += Math.round(netSalaryShed * 10);
+      aiReasons.push(
+        `AI > $${AI_CAP_RELIEF_THRESHOLD.toFixed(0)}M payroll: reluctant to add $${Math.abs(netSalaryShed).toFixed(2)}M payroll`
+      );
+    }
+
+    const expiringIn = userSendPlayers.filter((p) => getPlayerContractYears(p) === 1);
+    const multiYrOut = aiSendPlayers.filter((p) => getPlayerContractYears(p) >= 2 && getPlayerSalary(p) >= 6);
+    if (expiringIn.length > 0 && multiYrOut.length > 0) {
+      const expiringBonus = Math.round(
+        expiringIn.reduce((s, p) => s + 18 + getPlayerSalary(p) * 3.5, 0)
+      );
+      aiCapBonus += expiringBonus;
+      aiReasons.push('Expiring deal(s) clear future cap books');
+    }
+  }
+
+  const cheapRookieIncoming = userSendPlayers.filter(
+    (p) => getPlayerContractYears(p) >= 2 && getPlayerSalary(p) <= 3.5
+  );
+  if (cheapRookieIncoming.length > 0) {
+    aiCapBonus += cheapRookieIncoming.length * 24;
+    aiReasons.push(`Values ${cheapRookieIncoming.length} cheap team-controlled rookie/bridge deal(s)`);
+  }
+
+  const capBlocked =
+    hasAssets && (userPostPayroll > HARD_SALARY_CAP || partnerPostPayroll > HARD_SALARY_CAP);
+  const rosterBlocked = hasAssets && (userNewCount > 30 || partnerNewCount > 30);
+
+  let capBlockReason: string | null = null;
+  if (userPostPayroll > HARD_SALARY_CAP && partnerPostPayroll > HARD_SALARY_CAP) {
+    capBlockReason = `Both teams exceed the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap (${userTeam?.id}: $${userPostPayroll.toFixed(2)}M, ${partnerTeam?.id}: $${partnerPostPayroll.toFixed(2)}M).`;
+  } else if (userPostPayroll > HARD_SALARY_CAP) {
+    capBlockReason = `Blocked: ${userTeam?.id} post-trade payroll ($${userPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
+  } else if (partnerPostPayroll > HARD_SALARY_CAP) {
+    capBlockReason = `Blocked: ${partnerTeam?.id} post-trade payroll ($${partnerPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
+  } else if (rosterBlocked) {
+    capBlockReason = `Blocked: Resulting roster exceeds 30 players (${userTeam?.id}: ${userNewCount}, ${partnerTeam?.id}: ${partnerNewCount}).`;
+  }
+
+  const starTax = aiSendPlayers.some((p) => p.ovr >= 84) ? 1.08 : 1.0;
+  const userOfferScoreForAI = Math.max(0, userBasePts + aiCapBonus);
+  const aiOfferScoreForUser = aiBasePts;
+  const ratio = aiBasePts > 0 ? userOfferScoreForAI / (aiBasePts * starTax) : 0;
+
+  let status: TradeEvaluationResult['status'] = 'EMPTY';
+  let message = 'Select players and/or future draft picks on both sides to construct a trade proposal.';
+
+  if (hasAssets) {
+    if (capBlocked || rosterBlocked) {
+      status = 'BLOCKED';
+      message = capBlockReason || 'Trade violates league cap or roster limits.';
+    } else if (ratio >= 0.96) {
+      status = 'ACCEPT';
+      message = `${partnerTeam?.city} GM: "This deal fits our roster timeline and $180.0M cap sheet. We accept."`;
+    } else if (ratio >= 0.82) {
+      status = 'CLOSE';
+      message = `${partnerTeam?.city} GM: "We are close—add a mid-round pick, prospect, or extra cap relief to get it done."`;
+    } else {
+      status = 'REJECT';
+      message = `${partnerTeam?.city} GM: "We cannot justify moving these assets for that return."`;
+    }
+  }
+
+  return {
+    userBasePts,
+    aiBasePts,
+    userOfferScoreForAI,
+    aiOfferScoreForUser,
+    ratio,
+    status,
+    capBlocked,
+    rosterBlocked,
+    capBlockReason,
+    message,
+    aiReasons,
+    userPreSummary,
+    partnerPreSummary,
+    userPostPayroll,
+    partnerPostPayroll,
+  };
+}
+
 export function getTeamRosterNeeds(roster: Player[]) {
   const counts: Record<string, number> = {
     C: 0, '1B': 0, '2B': 0, '3B': 0, SS: 0, LF: 0, CF: 0, RF: 0, DH: 0, SP: 0, RP: 0,
@@ -418,14 +769,56 @@ export function getTeamRosterNeeds(roster: Player[]) {
   return { counts, totalHitters, totalPitchers };
 }
 
-export function selectBestDraftPickForAI(availablePlayers: Player[], teamRoster: Player[]): Player {
+export function selectBestDraftPickForAI(
+  availablePlayers: Player[],
+  teamRoster: Player[],
+  options?: {
+    team?: Team;
+    isRookieDraft?: boolean;
+    round?: number;
+    targetRosterSize?: number;
+  }
+): Player | null {
+  if (availablePlayers.length === 0) return null;
+
   const { counts, totalHitters, totalPitchers } = getTeamRosterNeeds(teamRoster);
-  const topCandidates = availablePlayers.slice(0, 28);
-  let bestPlayer = topCandidates[0];
+  const summary = getTeamPayrollSummary(options?.team, teamRoster);
+
+  const isRookie = Boolean(options?.isRookieDraft);
+  const rookieSlotCost = isRookie ? getRookieContractSalary(options?.round ?? 3) : 0;
+
+  // Hard cap check for rookie draft slots
+  if (isRookie && roundMoney(summary.totalPayroll + rookieSlotCost) > HARD_SALARY_CAP) {
+    return null;
+  }
+
+  const targetSize = options?.targetRosterSize ?? (isRookie ? teamRoster.length + 1 : 30);
+  const remainingFutureSlots = isRookie ? 0 : Math.max(0, targetSize - teamRoster.length - 1);
+  const maxAffordableSalary = isRookie
+    ? rookieSlotCost
+    : roundMoney(HARD_SALARY_CAP - summary.totalPayroll - remainingFutureSlots * MIN_PLAYER_SALARY);
+
+  const affordablePool = isRookie
+    ? availablePlayers
+    : availablePlayers.filter((p) => getPlayerSalary(p) <= maxAffordableSalary + 0.001);
+
+  const candidatePool =
+    affordablePool.length > 0
+      ? affordablePool.slice(0, 28)
+      : [...availablePlayers].sort((a, b) => getPlayerSalary(a) - getPlayerSalary(b)).slice(0, 1);
+
+  let bestPlayer = candidatePool[0];
   let bestScore = -9999;
 
-  for (const p of topCandidates) {
+  for (const p of candidatePool) {
+    const sal = isRookie ? rookieSlotCost : getPlayerSalary(p);
     let score = p.ovr * 1.6 + (p.potential - p.ovr) * 0.45 - Math.max(0, p.age - 28) * 1.5;
+
+    // Slight value efficiency bonus in inaugural draft so AI doesn't overpay for declining vets
+    if (!isRookie) {
+      if (sal <= 3.5 && p.age <= 25) score += 5;
+      if (summary.totalPayroll > 125 && sal > 12) score -= (sal - 12) * 0.9;
+    }
 
     if (p.isPitcher) {
       if (totalPitchers >= 15) score -= 45;
@@ -447,6 +840,446 @@ export function selectBestDraftPickForAI(availablePlayers: Player[], teamRoster:
     }
   }
   return bestPlayer;
+}
+
+// ============================================================================
+// OFFSEASON PIPELINE: RETIREMENTS -> ASYMMETRIC AGING -> CONTRACTS & FA
+// ============================================================================
+
+export function getRetirementProbability(player: Player, nextAge: number): number {
+  if (nextAge < 33) return 0;
+  let prob = 0;
+  if (nextAge === 33) prob = 0.06;
+  else if (nextAge === 34) prob = 0.12;
+  else if (nextAge === 35) prob = 0.22;
+  else if (nextAge === 36) prob = 0.34;
+  else if (nextAge === 37) prob = 0.48;
+  else if (nextAge === 38) prob = 0.64;
+  else if (nextAge === 39) prob = 0.80;
+  else prob = 0.92;
+
+  if (player.ovr < 62) prob += 0.26;
+  else if (player.ovr < 68) prob += 0.1;
+
+  if (!player.teamId) prob += 0.22;
+  if (player.ovr >= 80 && player.teamId && nextAge <= 37) prob -= 0.12;
+
+  return Math.max(0.02, Math.min(0.97, prob));
+}
+
+function formatCareerLine(p: Player, stats: Record<string, number>): string {
+  if (p.isPitcher) {
+    const ratios = getPitcherRatios(stats);
+    return `${stats.w || 0}-${stats.l || 0} · ${ratios.era} ERA · ${stats.so || 0} SO · ${stats.sv || 0} SV`;
+  }
+  const slash = getHitterSlash(stats);
+  return `${slash.avg} AVG · ${stats.hr || 0} HR · ${stats.rbi || 0} RBI · ${stats.sb || 0} SB`;
+}
+
+export function runOffseasonRollover(params: {
+  nextYear: number;
+  teams: Team[];
+  players: Player[];
+  draftPicks: DraftPick[];
+  userTeamId: string;
+}): {
+  teams: Team[];
+  players: Player[];
+  draftPicks: DraftPick[];
+  orderedRookiePicks: DraftSlot[];
+  schedule: ScheduleDay[];
+  retirements: RetiredPlayerSummary[];
+  expiringUserCount: number;
+  expiringLeagueCount: number;
+  aiReSignedCount: number;
+} {
+  const { nextYear, teams, players, draftPicks, userTeamId } = params;
+
+  // 1. Capture reverse-standings draft order BEFORE resetting records
+  const reverseStandings = [...teams].sort((a, b) => {
+    if (a.wins !== b.wins) return a.wins - b.wins;
+    return a.runsScored - a.runsAllowed - (b.runsScored - b.runsAllowed);
+  });
+  const slotByOrigTeam: Record<string, number> = {};
+  reverseStandings.forEach((t, idx) => {
+    slotByOrigTeam[t.id] = idx + 1;
+  });
+
+  const yearPicks = draftPicks.filter((pk) => pk.year === nextYear);
+  const orderedRookiePicks: DraftSlot[] = [];
+  for (let r = 1; r <= 5; r++) {
+    const roundPicks = yearPicks
+      .filter((pk) => pk.round === r)
+      .sort((a, b) => (slotByOrigTeam[a.originalTeamId] || 16) - (slotByOrigTeam[b.originalTeamId] || 16));
+
+    roundPicks.forEach((pk, idx) => {
+      orderedRookiePicks.push({
+        pickNum: (r - 1) * 32 + idx + 1,
+        round: r,
+        teamId: pk.ownerTeamId,
+        originalTeamId: pk.originalTeamId,
+        pickId: pk.id,
+      });
+    });
+  }
+
+  // 2. Retirements + Asymmetric Aging + Stat Archiving
+  const retirements: RetiredPlayerSummary[] = [];
+  const survivors: Player[] = [];
+
+  for (const p of players) {
+    const mergedCareer: Record<string, number> = {};
+    for (const k of Object.keys(p.careerStats)) {
+      mergedCareer[k] = (p.careerStats[k] || 0) + (p.seasonStats[k] || 0);
+    }
+
+    const nextAge = p.age + 1;
+    const retireProb = getRetirementProbability(p, nextAge);
+    if (retireProb > 0 && Math.random() < retireProb) {
+      let reason = `Age ${nextAge} veteran retirement`;
+      if (!p.teamId) reason = 'Retired as unrostered free agent';
+      else if (p.ovr < 62) reason = 'Declining skills / below 62 OVR';
+      retirements.push({
+        id: p.id,
+        name: p.name,
+        position: p.position,
+        isPitcher: p.isPitcher,
+        age: nextAge,
+        ovr: p.ovr,
+        teamId: p.teamId,
+        salary: getPlayerSalary(p),
+        reason,
+        careerLine: formatCareerLine(p, mergedCareer),
+      });
+      continue;
+    }
+
+    const historyEntry =
+      (p.seasonStats.g || 0) > 0 && p.teamId
+        ? [
+            ...(p.seasonHistory || []).slice(-14),
+            {
+              year: nextYear - 1,
+              teamId: p.teamId,
+              ovr: p.ovr,
+              stats: { ...p.seasonStats },
+            },
+          ]
+        : p.seasonHistory || [];
+
+    const aged: Player = {
+      ...p,
+      age: nextAge,
+      salary: getPlayerSalary(p),
+      contractYears: getPlayerContractYears(p),
+      careerStats: mergedCareer,
+      seasonStats: createEmptySeasonStats(p.isPitcher),
+      seasonHistory: historyEntry,
+    };
+
+    // Asymmetric aging curves:
+    // <26: growth toward potential
+    // 26-29: prime stability
+    // 30+: Speed & Velocity decline ~2x faster than Power / Control / Finesse
+    if (nextAge <= 25) {
+      const gap = Math.max(0, aged.potential - aged.ovr);
+      const baseGain = gap > 0 ? Math.min(gap, Math.round(1 + Math.random() * (2 + gap * 0.28))) : Math.round(Math.random() * 2);
+      if (aged.isPitcher) {
+        aged.velocity = clamp((aged.velocity ?? 50) + baseGain + Math.round((Math.random() - 0.35) * 2), 20, 99);
+        aged.control = clamp((aged.control ?? 50) + baseGain + Math.round((Math.random() - 0.3) * 2), 20, 99);
+        aged.finesse = clamp((aged.finesse ?? 50) + baseGain + Math.round((Math.random() - 0.3) * 2), 20, 99);
+      } else {
+        aged.power = clamp((aged.power ?? 50) + baseGain + Math.round((Math.random() - 0.3) * 2), 20, 99);
+        aged.speed = clamp((aged.speed ?? 50) + Math.round(baseGain * 0.85) + Math.round((Math.random() - 0.35) * 2), 20, 99);
+        aged.glove = clamp((aged.glove ?? 50) + baseGain + Math.round((Math.random() - 0.3) * 2), 20, 99);
+      }
+    } else if (nextAge <= 29) {
+      const minorShift = () => Math.round((Math.random() - 0.42) * 2.4);
+      if (aged.isPitcher) {
+        aged.velocity = clamp((aged.velocity ?? 50) + minorShift(), 20, 99);
+        aged.control = clamp((aged.control ?? 50) + Math.round((Math.random() - 0.32) * 2.2), 20, 99);
+        aged.finesse = clamp((aged.finesse ?? 50) + Math.round((Math.random() - 0.35) * 2.2), 20, 99);
+      } else {
+        aged.power = clamp((aged.power ?? 50) + Math.round((Math.random() - 0.35) * 2.2), 20, 99);
+        aged.speed = clamp((aged.speed ?? 50) + Math.round((Math.random() - 0.52) * 2.2), 20, 99);
+        aged.glove = clamp((aged.glove ?? 50) + minorShift(), 20, 99);
+      }
+    } else {
+      const severity = nextAge <= 32 ? 1.0 : nextAge <= 35 ? 1.8 : 2.7;
+      if (aged.isPitcher) {
+        // Velocity declines faster than Control & Finesse
+        const velDrop = Math.round(severity * (1.7 + Math.random() * 1.8));
+        const ctlDelta = Math.round((nextAge <= 33 ? 0.5 : -0.3) - Math.random() * severity * 0.85);
+        const finDelta = Math.round((nextAge <= 32 ? 0.4 : -0.35) - Math.random() * severity * 0.95);
+        aged.velocity = clamp((aged.velocity ?? 50) - velDrop, 20, 99);
+        aged.control = clamp((aged.control ?? 50) + ctlDelta, 20, 99);
+        aged.finesse = clamp((aged.finesse ?? 50) + finDelta, 20, 99);
+      } else {
+        // Speed declines faster than Power & Glove
+        const spdDrop = Math.round(severity * (1.8 + Math.random() * 1.8));
+        const powDelta = Math.round((nextAge <= 32 ? 0.4 : -0.3) - Math.random() * severity * 1.05);
+        const glvDelta = -Math.round(severity * (0.65 + Math.random() * 1.0));
+        aged.speed = clamp((aged.speed ?? 50) - spdDrop, 20, 99);
+        aged.power = clamp((aged.power ?? 50) + powDelta, 20, 99);
+        aged.glove = clamp((aged.glove ?? 50) + glvDelta, 20, 99);
+      }
+    }
+
+    aged.ovr = calculateOverall(aged);
+    survivors.push(aged);
+  }
+
+  retirements.sort((a, b) => b.ovr - a.ovr || b.age - a.age);
+
+  // 3. Reset Teams (including Dead Cap = 0 for new league year)
+  const resetTeams: Team[] = teams.map((t) => ({
+    ...t,
+    wins: 0,
+    losses: 0,
+    runsScored: 0,
+    runsAllowed: 0,
+    streak: 0,
+    last10: [],
+    deadCap: 0,
+  }));
+
+  // 4. Contract Rollover & AI Immediate Re-Signings
+  const activePayrollByTeam: Record<string, number> = {};
+  const rosterCountByTeam: Record<string, number> = {};
+  resetTeams.forEach((t) => {
+    activePayrollByTeam[t.id] = 0;
+    rosterCountByTeam[t.id] = 0;
+  });
+
+  const expiringAIPool: Player[] = [];
+  const rolledPlayers: Player[] = [];
+  let expiringUserCount = 0;
+  let expiringLeagueCount = 0;
+  let aiReSignedCount = 0;
+
+  for (const p of survivors) {
+    const yrsLeft = getPlayerContractYears(p) - 1;
+    if (p.teamId && yrsLeft >= 1) {
+      const kept: Player = {
+        ...p,
+        contractYears: yrsLeft,
+        previousTeamId: p.teamId,
+      };
+      activePayrollByTeam[p.teamId] = roundMoney((activePayrollByTeam[p.teamId] || 0) + getPlayerSalary(kept));
+      rosterCountByTeam[p.teamId] = (rosterCountByTeam[p.teamId] || 0) + 1;
+      rolledPlayers.push(kept);
+    } else if (p.teamId && yrsLeft <= 0) {
+      expiringLeagueCount++;
+      const marketSal = calculateFairSalary(p.ovr, p.age, p.potential);
+      if (p.teamId === userTeamId) {
+        expiringUserCount++;
+        rolledPlayers.push({
+          ...p,
+          teamId: null,
+          previousTeamId: userTeamId,
+          salary: marketSal,
+          contractYears: 1,
+        });
+      } else {
+        expiringAIPool.push({
+          ...p,
+          previousTeamId: p.teamId,
+          salary: marketSal,
+          contractYears: 1,
+        });
+      }
+    } else {
+      // Already a Free Agent: refresh asking salary
+      rolledPlayers.push({
+        ...p,
+        teamId: null,
+        previousTeamId: null,
+        salary: calculateFairSalary(p.ovr, p.age, p.potential),
+        contractYears: 1,
+      });
+    }
+  }
+
+  // AI evaluates its expiring players sorted by value; re-signs core guys strictly under $167M budget
+  // (reserving ~$13M headroom for Free Agency + Rookie Draft slots)
+  expiringAIPool.sort((a, b) => b.ovr - a.ovr);
+  for (const p of expiringAIPool) {
+    const origTeam = p.previousTeamId;
+    if (!origTeam) continue;
+    const curPay = activePayrollByTeam[origTeam] || 0;
+    const curCount = rosterCountByTeam[origTeam] || 0;
+    const desiredTerm = p.age >= 32 ? 2 : p.ovr >= 78 ? 4 : 3;
+    const offer = calculateExtensionOffer(p, desiredTerm);
+
+    const worthKeeping = p.ovr >= 67 || (p.age <= 25 && p.potential >= 74);
+    if (worthKeeping && curCount < 27 && roundMoney(curPay + offer.salary) <= 167.0) {
+      activePayrollByTeam[origTeam] = roundMoney(curPay + offer.salary);
+      rosterCountByTeam[origTeam] = curCount + 1;
+      aiReSignedCount++;
+      rolledPlayers.push({
+        ...p,
+        teamId: origTeam,
+        salary: offer.salary,
+        contractYears: offer.years,
+      });
+    } else {
+      rolledPlayers.push({
+        ...p,
+        teamId: null,
+        contractYears: 1,
+      });
+    }
+  }
+
+  // 5. Future Draft Picks (+3 years out)
+  const newFutureYear = nextYear + 3;
+  const addedFuturePicks: DraftPick[] = [];
+  for (let r = 1; r <= 5; r++) {
+    for (const t of resetTeams) {
+      addedFuturePicks.push({
+        id: `PICK-${newFutureYear}-R${r}-${t.id}`,
+        year: newFutureYear,
+        round: r,
+        originalTeamId: t.id,
+        ownerTeamId: t.id,
+      });
+    }
+  }
+  const nextDraftPicks = [...draftPicks.filter((pk) => pk.year > nextYear), ...addedFuturePicks];
+  const schedule = generateSeasonSchedule(resetTeams);
+
+  return {
+    teams: resetTeams,
+    players: rolledPlayers,
+    draftPicks: nextDraftPicks,
+    orderedRookiePicks,
+    schedule,
+    retirements,
+    expiringUserCount,
+    expiringLeagueCount,
+    aiReSignedCount,
+  };
+}
+
+export function runAIOffseasonFreeAgency(params: {
+  teams: Team[];
+  players: Player[];
+  userTeamId: string;
+  draftOrder: DraftSlot[];
+}): { players: Player[]; signings: string[] } {
+  const { teams, players, userTeamId, draftOrder } = params;
+  const workingPlayers = players.map((p) => ({ ...p }));
+  const signings: string[] = [];
+
+  // Compute rookie draft salary reserve needed per team
+  const rookieReserveByTeam: Record<string, number> = {};
+  draftOrder.forEach((slot) => {
+    rookieReserveByTeam[slot.teamId] = roundMoney(
+      (rookieReserveByTeam[slot.teamId] || 0) + getRookieContractSalary(slot.round)
+    );
+  });
+
+  const aiTeams = teams.filter((t) => t.id !== userTeamId);
+  const rosterByTeam: Record<string, Player[]> = {};
+  teams.forEach((t) => {
+    rosterByTeam[t.id] = [];
+  });
+  workingPlayers.forEach((p) => {
+    if (p.teamId && rosterByTeam[p.teamId]) {
+      rosterByTeam[p.teamId].push(p);
+    }
+  });
+
+  const faPool = workingPlayers
+    .filter((p) => !p.teamId)
+    .sort((a, b) => b.ovr - a.ovr || b.potential - a.potential);
+
+  // Two passes:
+  // Pass 1: Teams under $90M floor or under 24 players fill roster & reach floor
+  // Pass 2: Contenders/cap-rich teams upgrade weak spots up to 27 players pre-draft
+  for (let pass = 1; pass <= 2; pass++) {
+    // Shuffle AI order slightly for fairness
+    const orderedAI = [...aiTeams].sort((a, b) => {
+      const sumA = getTeamPayrollSummary(a, rosterByTeam[a.id]);
+      const sumB = getTeamPayrollSummary(b, rosterByTeam[b.id]);
+      if (pass === 1) return sumA.totalPayroll - sumB.totalPayroll;
+      return Math.random() - 0.5;
+    });
+
+    for (const aiTeam of orderedAI) {
+      const reserve = rookieReserveByTeam[aiTeam.id] || 3.5;
+      const picksForTeam = draftOrder.filter((s) => s.teamId === aiTeam.id).length;
+      const maxPreDraftRoster =
+        pass === 1 ? Math.max(22, 30 - Math.min(5, picksForTeam)) : Math.min(27, Math.max(25, 30 - Math.min(4, picksForTeam)));
+
+      for (let attempt = 0; attempt < 12; attempt++) {
+        const roster = rosterByTeam[aiTeam.id];
+        const summary = getTeamPayrollSummary(aiTeam, roster);
+        const effectiveCapRoom = roundMoney(HARD_SALARY_CAP - summary.totalPayroll - reserve);
+
+        if (roster.length >= maxPreDraftRoster || effectiveCapRoom < MIN_PLAYER_SALARY) break;
+        if (pass === 1 && !summary.underFloor && roster.length >= 24) break;
+        if (pass === 2 && (summary.totalPayroll >= 168.0 || roster.length >= maxPreDraftRoster)) break;
+
+        const needs = getTeamRosterNeeds(roster);
+        // Find best affordable FA fitting positional balance (scan full pool so depth guys remain visible)
+        let bestIdx = -1;
+        let bestScore = -9999;
+        let evaluated = 0;
+
+        for (let i = 0; i < faPool.length && evaluated < 90; i++) {
+          const cand = faPool[i];
+          if (cand.teamId) continue;
+          const sal = getPlayerSalary(cand);
+          if (sal > effectiveCapRoom) continue;
+          if (roundMoney(summary.totalPayroll + sal + reserve) > HARD_SALARY_CAP) continue;
+          evaluated++;
+
+          // If pass 1 & under floor, favor fair-value starters to help climb toward $90M
+          let score = cand.ovr * 1.5 + (cand.potential - cand.ovr) * 0.3;
+          if (cand.isPitcher) {
+            if (needs.totalPitchers < 11) score += 14;
+            else if (needs.totalPitchers >= 14) score -= 25;
+            if (cand.position === 'SP' && needs.counts.SP < 5) score += 10;
+          } else {
+            if ((needs.counts[cand.position] || 0) === 0) score += 16;
+            else if ((needs.counts[cand.position] || 0) >= 3) score -= 20;
+            if (needs.totalHitters >= 16) score -= 25;
+          }
+          if (pass === 1 && summary.underFloor && sal >= 4) score += 6;
+
+          if (score > bestScore) {
+            bestScore = score;
+            bestIdx = i;
+          }
+        }
+
+        if (bestIdx === -1) break;
+        const signed = faPool[bestIdx];
+        const term = signed.age >= 33 ? 1 : signed.ovr >= 74 ? 3 : 2;
+        const offer = calculateExtensionOffer(signed, term);
+        if (roundMoney(summary.totalPayroll + offer.salary + reserve) > HARD_SALARY_CAP) {
+          // Fallback to base salary if slightly higher
+          if (roundMoney(summary.totalPayroll + getPlayerSalary(signed) + reserve) > HARD_SALARY_CAP) break;
+          signed.salary = getPlayerSalary(signed);
+        } else {
+          signed.salary = offer.salary;
+        }
+        signed.contractYears = term;
+        signed.teamId = aiTeam.id;
+        signed.previousTeamId = aiTeam.id;
+        roster.push(signed);
+
+        if (signed.ovr >= 68) {
+          signings.push(
+            `${aiTeam.id} signed FA ${signed.position} ${signed.name} (${signed.ovr} OVR) — $${signed.salary.toFixed(2)}M / ${term}yr.`
+          );
+        }
+      }
+    }
+  }
+
+  return { players: workingPlayers, signings };
 }
 
 export type ScheduleDay = Array<[string, string]>;

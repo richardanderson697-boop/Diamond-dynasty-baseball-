@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { Bookmark, Check, X } from 'lucide-react';
-import { CardTheme, Player, SavedPlayerCard, Team } from '../types/baseball';
-import { formatIP, getHitterSlash, getPitcherRatios } from '../engine/baseballEngine';
+import { CardTheme, Player, Team } from '../types/baseball';
+import {
+  formatIP,
+  formatMoney,
+  getHitterSlash,
+  getPitcherRatios,
+  getPlayerContractYears,
+  getPlayerSalary,
+} from '../engine/baseballEngine';
 import { AttributeRadarSvg, getCardThemeClasses, RatingBadge, TeamBadge } from './SharedBadges';
 import { PlayerAvatarSvg } from './PlayerAvatarSvg';
 
@@ -30,6 +37,8 @@ export function PlayerCardModal({
   const slash = !player.isPitcher ? getHitterSlash(player.seasonStats) : null;
   const ratios = player.isPitcher ? getPitcherRatios(player.seasonStats) : null;
   const themeStyle = getCardThemeClasses(theme);
+  const salary = getPlayerSalary(player);
+  const contractYears = getPlayerContractYears(player);
 
   const handleSave = async () => {
     setSaving(true);
@@ -73,6 +82,10 @@ export function PlayerCardModal({
                 <span className="font-mono">B/T {player.bats}/{player.throws}</span>
                 <span aria-hidden="true">·</span>
                 <span className="font-mono text-amber-300">POT {player.potential}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono tabular-nums text-emerald-300">
+                  {formatMoney(salary)} / {contractYears} yr{contractYears > 1 ? 's' : ''}
+                </span>
               </div>
             </div>
           </div>
@@ -354,7 +367,7 @@ export function PlayerCardModal({
                 className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0"
               >
                 {savedNotice ? <Check className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
-                {saving ? 'Saving...' : savedNotice ? 'Update Saved Card' : canSaveToCloud ? 'Save Card to Firebase' : 'Save Card Locally'}
+                {saving ? 'Saving...' : savedNotice ? 'Update Saved Card' : canSaveToCloud ? 'Save Card (Device + Backup)' : 'Save Card On Device'}
               </button>
             </div>
           </div>

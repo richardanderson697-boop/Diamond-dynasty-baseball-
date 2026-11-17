@@ -2,6 +2,7 @@ import {
   collection,
   deleteDoc,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -23,7 +24,14 @@ import {
   OperationType,
   raceWithQuotaAbort,
 } from '../firebase';
-import { createEmptySeasonStats, ScheduleDay } from '../engine/baseballEngine';
+import {
+  createEmptySeasonStats,
+  getPlayerContractYears,
+  getPlayerSalary,
+  getTeamDeadCap,
+  roundMoney,
+  ScheduleDay,
+} from '../engine/baseballEngine';
 import {
   DraftHistoryEntry,
   DraftPick,
@@ -105,10 +113,17 @@ export function subscribeToFranchises(
     q,
     (snap) => {
       const list: FranchiseSummary[] = snap.docs
-        .map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<FranchiseSummary, 'id'>),
-        }))
+        .map((d) => {
+          const data = d.data() as Omit<FranchiseSummary, 'id'>;
+          return {
+            id: d.id,
+            ...data,
+            teams: (data.teams || []).map((t) => ({
+              ...t,
+              deadCap: getTeamDeadCap(t),
+            })),
+          };
+        })
         .sort((a, b) => {
           const tA = (a.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
           const tB = (b.updatedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
@@ -211,13 +226,17 @@ function rehydratePlayerFromFirestore(raw: Player & { _inDraftPool?: boolean }):
 } {
   const { _inDraftPool, ...rest } = raw;
   const isPitcher = Boolean(rest.isPitcher);
+  const hydratedBase: Player = {
+    ...rest,
+    seasonStats: { ...createEmptySeasonStats(isPitcher), ...(rest.seasonStats || {}) },
+    careerStats: { ...createEmptySeasonStats(isPitcher), ...(rest.careerStats || {}) },
+    previousTeamId: rest.previousTeamId ?? null,
+  };
+  hydratedBase.salary = getPlayerSalary(hydratedBase);
+  hydratedBase.contractYears = getPlayerContractYears(hydratedBase);
   return {
     inDraftPool: Boolean(_inDraftPool),
-    player: {
-      ...rest,
-      seasonStats: { ...createEmptySeasonStats(isPitcher), ...(rest.seasonStats || {}) },
-      careerStats: { ...createEmptySeasonStats(isPitcher), ...(rest.careerStats || {}) },
-    },
+    player: hydratedBase,
   };
 }
 
@@ -233,9 +252,12 @@ function sanitizePlayerForFirestore(p: Player): Record<string, unknown> {
     teamId: p.teamId ?? null,
     ovr: Math.round(p.ovr),
     potential: Math.round(p.potential),
+    salary: roundMoney(getPlayerSalary(p)),
+    contractYears: getPlayerContractYears(p),
     seasonStats: compactStatsForFirestore(p.seasonStats),
     careerStats: compactStatsForFirestore(p.careerStats),
   };
+  if (p.previousTeamId) clean.previousTeamId = p.previousTeamId;
   if (p.power !== undefined) clean.power = Math.round(p.power);
   if (p.speed !== undefined) clean.speed = Math.round(p.speed);
   if (p.glove !== undefined) clean.glove = Math.round(p.glove);
@@ -244,6 +266,59 @@ function sanitizePlayerForFirestore(p: Player): Record<string, unknown> {
   if (p.finesse !== undefined) clean.finesse = Math.round(p.finesse);
   if (p.draftYear !== undefined) clean.draftYear = Math.round(p.draftYear);
   return clean;
+}
+
+// ============================================================================
+// GZIP COMPRESSION HELPERS (~6x-8x PAYLOAD REDUCTION FOR FREE TIER QUOTA)
+// ============================================================================
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function compressJsonPayload(obj: unknown): Promise<{ encoding: 'gzip-base64' | 'json'; payload: string }> {
+  const jsonStr = JSON.stringify(obj);
+  if (typeof CompressionStream !== 'undefined') {
+    try {
+      const encoded = new TextEncoder().encode(jsonStr);
+      const stream = new Blob([encoded]).stream().pipeThrough(new CompressionStream('gzip'));
+      const buffer = await new Response(stream).arrayBuffer();
+      const b64 = uint8ArrayToBase64(new Uint8Array(buffer));
+      return { encoding: 'gzip-base64', payload: b64 };
+    } catch {
+      // Fallback to raw JSON if stream compression fails
+    }
+  }
+  return { encoding: 'json', payload: jsonStr };
+}
+
+async function decompressJsonPayload<T>(encoding: string | undefined, payload: string): Promise<T> {
+  if (encoding === 'gzip-base64') {
+    if (typeof DecompressionStream === 'undefined') {
+      throw new Error('Browser does not support DecompressionStream to open gzipped cloud backup.');
+    }
+    const bytes = base64ToUint8Array(payload);
+    const stream = new Blob([bytes.buffer as ArrayBuffer])
+      .stream()
+      .pipeThrough(new DecompressionStream('gzip'));
+    const text = await new Response(stream).text();
+    return JSON.parse(text) as T;
+  }
+  return JSON.parse(payload) as T;
 }
 
 export interface FullFranchisePayload {
@@ -266,6 +341,9 @@ export interface FullFranchisePayload {
   draftPicks: DraftPick[];
   draftOrder: DraftSlot[];
   draftHistory: DraftHistoryEntry[];
+  savedCards?: SavedPlayerCard[];
+  seasonSnapshots?: SeasonSnapshot[];
+  leagueRecords?: LeagueRecord[];
 }
 
 export interface SaveFranchiseOptions {
@@ -274,13 +352,26 @@ export interface SaveFranchiseOptions {
   includeScheduleAndDraft?: boolean;
 }
 
+interface CompressedBundleShape {
+  players: Array<Record<string, unknown>>;
+  draftPool: Array<Record<string, unknown>>;
+  schedule: Array<{ day: number; matchups: string[] }>;
+  draftPicks: DraftPick[];
+  draftOrder: DraftSlot[];
+  draftHistory: Array<Omit<DraftHistoryEntry, 'player'> & { player: Record<string, unknown> }>;
+  savedCards?: SavedPlayerCard[];
+  seasonSnapshots?: SeasonSnapshot[];
+  leagueRecords?: LeagueRecord[];
+}
+
 export async function saveFullFranchiseToCloud(
   payload: FullFranchisePayload,
   options: SaveFranchiseOptions = {}
-): Promise<void> {
-  const isNew = Boolean(options.isNew);
-  const includePlayers = isNew || options.includePlayers !== false;
-  const includeScheduleAndDraft = isNew || options.includeScheduleAndDraft !== false;
+): Promise<{ compressedBytes: number }> {
+  const includeBundle =
+    Boolean(options.isNew) ||
+    options.includePlayers !== false ||
+    options.includeScheduleAndDraft !== false;
 
   const {
     franchiseId,
@@ -302,15 +393,20 @@ export async function saveFullFranchiseToCloud(
     draftPicks,
     draftOrder,
     draftHistory,
+    savedCards,
+    seasonSnapshots,
+    leagueRecords,
   } = payload;
 
   const franchisePath = `franchises/${franchiseId}`;
-  const opType = isNew ? OperationType.CREATE : OperationType.UPDATE;
 
   return enqueueCloudWrite(async () => {
-    assertCloudWritesAllowed(opType, franchisePath);
+    assertCloudWritesAllowed(OperationType.WRITE, franchisePath);
     try {
       const franchiseRef = doc(db, 'franchises', franchiseId);
+      const existingSnap = await getDoc(franchiseRef);
+      const docExists = existingSnap.exists();
+      const opType = docExists ? OperationType.UPDATE : OperationType.CREATE;
 
       const rootData: Record<string, unknown> = {
         name: name.slice(0, 100),
@@ -327,84 +423,75 @@ export async function saveFullFranchiseToCloud(
         updatedAt: serverTimestamp(),
       };
 
-      // Lightweight root-only update when chunks are unchanged
-      if (!isNew && !includePlayers && !includeScheduleAndDraft) {
+      if (!includeBundle && docExists) {
         await raceWithQuotaAbort(updateDoc(franchiseRef, rootData), opType, franchisePath);
-        return;
+        return { compressedBytes: 0 };
+      }
+
+      const bundleContent: CompressedBundleShape = {
+        players: players.map(sanitizePlayerForFirestore),
+        draftPool: draftPool.map(sanitizePlayerForFirestore),
+        schedule: encodeScheduleForFirestore(schedule),
+        draftPicks: draftPicks.slice(0, 500),
+        draftOrder: draftOrder.slice(0, 1000),
+        draftHistory: draftHistory.slice(0, 1000).map((h) => ({
+          ...h,
+          player: sanitizePlayerForFirestore(h.player),
+        })),
+        savedCards: (savedCards || []).slice(0, 200),
+        seasonSnapshots: (seasonSnapshots || []).slice(0, 300),
+        leagueRecords: (leagueRecords || []).slice(0, 100),
+      };
+
+      const compressed = await compressJsonPayload(bundleContent);
+      if (compressed.payload.length > 890000) {
+        throw new Error(
+          'Compressed franchise payload exceeds 890KB Firestore document cap. Please export as a local .json file.'
+        );
       }
 
       const batch = writeBatch(db);
-
-      if (isNew) {
-        await raceWithQuotaAbort(
-          setDoc(franchiseRef, {
-            ownerId,
-            ...rootData,
-            createdAt: serverTimestamp(),
-          }),
-          opType,
-          franchisePath
-        );
+      if (!docExists) {
+        batch.set(franchiseRef, {
+          ownerId,
+          ...rootData,
+          createdAt: serverTimestamp(),
+        });
       } else {
         batch.update(franchiseRef, rootData);
       }
 
-      if (includePlayers) {
-        // Partition active players + draftPool into chunks of 400 (max 500 per rule)
-        const combinedPlayers = [
-          ...players.map((p) => ({ ...sanitizePlayerForFirestore(p), _inDraftPool: false })),
-          ...draftPool.map((p) => ({ ...sanitizePlayerForFirestore(p), _inDraftPool: true })),
-        ];
+      const bundleRef = doc(db, 'franchises', franchiseId, 'stateChunks', 'bundle_gz');
+      const bundleBody = {
+        ownerId,
+        franchiseId,
+        chunkType: 'COMPRESSED_BUNDLE',
+        items: [],
+        encoding: compressed.encoding,
+        payload: compressed.payload,
+        updatedAt: serverTimestamp(),
+      };
 
-        const chunkSize = 400;
-        const chunkCount = Math.max(4, Math.ceil(combinedPlayers.length / chunkSize));
-        for (let i = 0; i < chunkCount; i++) {
-          const slice = combinedPlayers.slice(i * chunkSize, (i + 1) * chunkSize);
-          const chunkRef = doc(db, 'franchises', franchiseId, 'stateChunks', `players_${i}`);
-          const chunkBody = {
-            ownerId,
-            franchiseId,
-            chunkType: 'PLAYERS',
-            items: slice,
-            updatedAt: serverTimestamp(),
-          };
-          if (isNew) {
-            batch.set(chunkRef, chunkBody);
-          } else {
-            batch.set(chunkRef, chunkBody, { merge: true });
-          }
-        }
-      }
-
-      if (includeScheduleAndDraft) {
-        const schedRef = doc(db, 'franchises', franchiseId, 'stateChunks', 'draft_and_schedule');
-        const schedBody = {
-          ownerId,
-          franchiseId,
-          chunkType: 'DRAFT_AND_SCHEDULE',
-          items: encodeScheduleForFirestore(schedule),
-          draftPicks: draftPicks.slice(0, 500),
-          draftOrder: draftOrder.slice(0, 1000),
-          draftHistory: draftHistory.slice(0, 1000).map((h) => ({
-            ...h,
-            player: sanitizePlayerForFirestore(h.player),
-          })),
+      const existingBundle = await getDoc(bundleRef);
+      if (!existingBundle.exists()) {
+        batch.set(bundleRef, bundleBody);
+      } else {
+        batch.update(bundleRef, {
+          chunkType: 'COMPRESSED_BUNDLE',
+          items: [],
+          encoding: compressed.encoding,
+          payload: compressed.payload,
           updatedAt: serverTimestamp(),
-        };
-
-        if (isNew) {
-          batch.set(schedRef, schedBody);
-        } else {
-          batch.set(schedRef, schedBody, { merge: true });
-        }
+        });
       }
 
       await raceWithQuotaAbort(batch.commit(), opType, franchisePath);
+      return { compressedBytes: compressed.payload.length };
     } catch (error) {
       if (isQuotaExceededError(error)) {
         markQuotaExceeded(error instanceof Error ? error.message : String(error));
       }
-      handleFirestoreError(error, opType, franchisePath);
+      handleFirestoreError(error, OperationType.WRITE, franchisePath);
     }
   });
 }
@@ -416,9 +503,48 @@ export async function loadFranchiseChunksFromCloud(franchiseId: string, ownerId:
   draftPicks: DraftPick[];
   draftOrder: DraftSlot[];
   draftHistory: DraftHistoryEntry[];
+  savedCards?: SavedPlayerCard[];
+  seasonSnapshots?: SeasonSnapshot[];
+  leagueRecords?: LeagueRecord[];
 }> {
   const path = `franchises/${franchiseId}/stateChunks`;
   try {
+    // Prefer single compressed bundle doc (1 read) before falling back to legacy multi-chunk reads
+    const bundleRef = doc(db, 'franchises', franchiseId, 'stateChunks', 'bundle_gz');
+    const bundleSnap = await getDoc(bundleRef);
+    if (bundleSnap.exists()) {
+      const data = bundleSnap.data() as {
+        chunkType?: string;
+        encoding?: string;
+        payload?: string;
+      };
+      if (data.chunkType === 'COMPRESSED_BUNDLE' && typeof data.payload === 'string') {
+        const parsed = await decompressJsonPayload<CompressedBundleShape>(
+          data.encoding,
+          data.payload
+        );
+        return {
+          players: (parsed.players || []).map(
+            (p) => rehydratePlayerFromFirestore(p as unknown as Player).player
+          ),
+          draftPool: (parsed.draftPool || []).map(
+            (p) => rehydratePlayerFromFirestore(p as unknown as Player).player
+          ),
+          schedule: decodeScheduleFromFirestore(parsed.schedule || []),
+          draftPicks: parsed.draftPicks || [],
+          draftOrder: parsed.draftOrder || [],
+          draftHistory: (parsed.draftHistory || []).map((h) => ({
+            ...h,
+            player: rehydratePlayerFromFirestore(h.player as unknown as Player).player,
+          })),
+          savedCards: parsed.savedCards,
+          seasonSnapshots: parsed.seasonSnapshots,
+          leagueRecords: parsed.leagueRecords,
+        };
+      }
+    }
+
+    // Legacy fallback: read uncompressed players_* and draft_and_schedule docs
     const q = query(collection(db, path), where('ownerId', '==', ownerId));
     const snap = await getDocs(q);
 

@@ -164,8 +164,8 @@ export function PlayerCardStudio({
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             {canSaveToCloud
-              ? 'Real-time Firebase Vault · Saved cards and custom prospects sync immediately across sessions.'
-              : 'Local Vault · Sign in with Google in the header to persist player cards to Firebase.'}
+              ? 'On-Device Vault · Cards & custom prospects save instantaneously locally and ship inside compressed Cloud Backups.'
+              : 'On-Device Vault · Cards save automatically in IndexedDB with zero cloud quota usage.'}
           </p>
         </div>
 

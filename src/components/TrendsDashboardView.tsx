@@ -105,8 +105,8 @@ export function TrendsDashboardView({
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
             {canSaveToCloud
-              ? 'Checkpoints sync in real time to Firebase as games progress across each 162-game season.'
-              : 'Live session trend checkpoints across game days and completed seasons.'}
+              ? 'Checkpoints save automatically on-device and include themselves in your Cloud Backups.'
+              : 'Live on-device trend checkpoints across game days and completed seasons.'}
           </p>
         </div>
 

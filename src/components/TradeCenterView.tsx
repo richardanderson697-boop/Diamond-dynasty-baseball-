@@ -1,7 +1,15 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
 import { DraftPick, Player, Team } from '../types/baseball';
-import { getDraftPickTradeValue, getPlayerTradeValue } from '../engine/baseballEngine';
+import {
+  evaluateTradeProposal,
+  formatMoney,
+  getDraftPickTradeValue,
+  getPlayerContractYears,
+  getPlayerSalary,
+  getPlayerTradeValue,
+  HARD_SALARY_CAP,
+} from '../engine/baseballEngine';
 import { RatingBadge } from './SharedBadges';
 
 interface TradeCenterViewProps {
@@ -66,52 +74,23 @@ export function TradeCenterView({
     .sort((a, b) => a.year - b.year || a.round - b.round);
 
   const evaluation = useMemo(() => {
-    const uPlayerVal = userSelPlayers.reduce((sum, id) => {
-      const p = userRoster.find((x) => x.id === id);
-      return sum + (p ? getPlayerTradeValue(p) : 0);
-    }, 0);
-    const uPickVal = userSelPicks.reduce((sum, id) => {
-      const pk = userPicks.find((x) => x.id === id);
-      return sum + (pk ? getDraftPickTradeValue(pk, teams, year) : 0);
-    }, 0);
+    const userSendPlayers = userRoster.filter((p) => userSelPlayers.includes(p.id));
+    const userSendPicks = userPicks.filter((pk) => userSelPicks.includes(pk.id));
+    const aiSendPlayers = partnerRoster.filter((p) => aiSelPlayers.includes(p.id));
+    const aiSendPicks = partnerPicks.filter((pk) => aiSelPicks.includes(pk.id));
 
-    const aPlayerVal = aiSelPlayers.reduce((sum, id) => {
-      const p = partnerRoster.find((x) => x.id === id);
-      return sum + (p ? getPlayerTradeValue(p) : 0);
-    }, 0);
-    const aPickVal = aiSelPicks.reduce((sum, id) => {
-      const pk = partnerPicks.find((x) => x.id === id);
-      return sum + (pk ? getDraftPickTradeValue(pk, teams, year) : 0);
-    }, 0);
-
-    const userTotal = uPlayerVal + uPickVal;
-    const aiTotal = aPlayerVal + aPickVal;
-    const hasAssets = userTotal > 0 && aiTotal > 0;
-
-    const starTax = aiSelPlayers.some(
-      (id) => (partnerRoster.find((p) => p.id === id)?.ovr || 0) >= 84
-    )
-      ? 1.08
-      : 1.0;
-    const ratio = aiTotal > 0 ? userTotal / (aiTotal * starTax) : 0;
-
-    let status: 'EMPTY' | 'ACCEPT' | 'CLOSE' | 'REJECT' = 'EMPTY';
-    let message =
-      'Select players and/or future draft picks on both sides to construct a trade proposal.';
-    if (hasAssets) {
-      if (ratio >= 0.96) {
-        status = 'ACCEPT';
-        message = `${partnerTeam?.city} GM: "This deal aligns with our organizational timeline. We accept."`;
-      } else if (ratio >= 0.82) {
-        status = 'CLOSE';
-        message = `${partnerTeam?.city} GM: "We are close, but need slightly more value—add a mid-round pick or upgrade a prospect."`;
-      } else {
-        status = 'REJECT';
-        message = `${partnerTeam?.city} GM: "We cannot justify moving these assets for that return."`;
-      }
-    }
-
-    return { userTotal, aiTotal, ratio, status, message };
+    return evaluateTradeProposal({
+      userTeam,
+      partnerTeam,
+      userRoster,
+      partnerRoster,
+      userSendPlayers,
+      userSendPicks,
+      aiSendPlayers,
+      aiSendPicks,
+      teams,
+      year,
+    });
   }, [
     userSelPlayers,
     userSelPicks,
@@ -123,6 +102,7 @@ export function TradeCenterView({
     partnerPicks,
     teams,
     year,
+    userTeam,
     partnerTeam,
   ]);
 
@@ -147,12 +127,12 @@ export function TradeCenterView({
               Front Office Trade Center
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Package up to 4 players and 4 future draft picks per side. Keep resulting rosters at or below 30 players.
+              Package up to 4 players &amp; 4 picks per side. Strictly enforces the $180.00M Hard Cap and 30-man limit on both teams.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="text-xs text-slate-400 font-semibold">Trade Partner:</span>
+            <span className="text-xs text-slate-400 font-semibold whitespace-nowrap">Trade Partner:</span>
             <select
               value={partnerId}
               onChange={(e) => handleChangePartner(e.target.value)}
@@ -167,15 +147,67 @@ export function TradeCenterView({
           </div>
         </div>
 
+        {/* Cap Comparison Strip for Both Teams */}
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            {
+              label: `${userTeam?.id || 'YOU'} Payroll Sheet`,
+              pre: evaluation.userPreSummary,
+              postPayroll: evaluation.userPostPayroll,
+            },
+            {
+              label: `${partnerId} Payroll Sheet`,
+              pre: evaluation.partnerPreSummary,
+              postPayroll: evaluation.partnerPostPayroll,
+            },
+          ].map((sheet) => {
+            const postSpace = HARD_SALARY_CAP - sheet.postPayroll;
+            const overCap = sheet.postPayroll > HARD_SALARY_CAP;
+            return (
+              <div
+                key={sheet.label}
+                className="bg-slate-950/75 border border-slate-800 rounded-lg p-3 flex flex-wrap items-center justify-between gap-3 text-xs font-mono tabular-nums"
+              >
+                <div>
+                  <div className="font-sans font-bold text-slate-200">{sheet.label}</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">
+                    Payroll {formatMoney(sheet.pre.totalPayroll)} · Space{' '}
+                    <span className="text-emerald-400">{formatMoney(sheet.pre.capSpace)}</span> · Dead{' '}
+                    <span className="text-rose-300">{formatMoney(sheet.pre.deadCap)}</span>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-slate-400">Post-Trade</div>
+                  <div className={`font-bold ${overCap ? 'text-rose-400' : 'text-white'}`}>
+                    {formatMoney(sheet.postPayroll)}{' '}
+                    <span className={overCap ? 'text-rose-400' : 'text-slate-400'}>
+                      ({postSpace >= 0 ? `${formatMoney(postSpace)} free` : `${formatMoney(Math.abs(postSpace))} over`})
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
           <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 flex items-center justify-between">
             <div>
               <div className="text-[11px] text-slate-400">You Send ({userTeam?.id})</div>
-              <div className="text-lg font-extrabold text-white font-mono">{evaluation.userTotal} pts</div>
+              <div className="text-lg font-extrabold text-white font-mono tabular-nums">
+                {evaluation.userBasePts} pts
+              </div>
+              {evaluation.userOfferScoreForAI !== evaluation.userBasePts && (
+                <div className="text-[11px] font-mono text-sky-400">
+                  AI Eval: {evaluation.userOfferScoreForAI} pts
+                </div>
+              )}
             </div>
             <div className="text-right">
               <div className="text-[11px] text-slate-400">You Receive ({partnerId})</div>
-              <div className="text-lg font-extrabold text-sky-400 font-mono">{evaluation.aiTotal} pts</div>
+              <div className="text-lg font-extrabold text-sky-400 font-mono tabular-nums">
+                {evaluation.aiBasePts} pts
+              </div>
             </div>
           </div>
 
@@ -188,6 +220,8 @@ export function TradeCenterView({
                     ? 'text-emerald-400'
                     : evaluation.status === 'CLOSE'
                     ? 'text-amber-400'
+                    : evaluation.status === 'BLOCKED'
+                    ? 'text-rose-400'
                     : 'text-slate-400'
                 }`}
               >
@@ -203,17 +237,34 @@ export function TradeCenterView({
                     ? 'bg-amber-500'
                     : 'bg-rose-500'
                 }`}
-                style={{ width: `${Math.min(100, Math.round(evaluation.ratio * 85))}%` }}
+                style={{
+                  width: `${
+                    evaluation.status === 'BLOCKED'
+                      ? 100
+                      : Math.min(100, Math.round(evaluation.ratio * 85))
+                  }%`,
+                }}
               />
             </div>
-            <p className="text-[11px] text-slate-300 mt-1.5">{evaluation.message}</p>
+            <p
+              className={`text-[11px] mt-1.5 ${
+                evaluation.status === 'BLOCKED' ? 'text-rose-300 font-semibold' : 'text-slate-300'
+              }`}
+            >
+              {evaluation.message}
+            </p>
+            {evaluation.aiReasons.length > 0 && (
+              <div className="mt-1 text-[11px] text-sky-300 font-mono">
+                {evaluation.aiReasons.join(' · ')}
+              </div>
+            )}
           </div>
 
           <div className="flex justify-end">
             <button
               disabled={evaluation.status !== 'ACCEPT'}
               onClick={handlePropose}
-              className="w-full lg:w-auto px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs transition cursor-pointer"
+              className="w-full lg:w-auto px-6 py-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-35 disabled:cursor-not-allowed text-slate-950 font-extrabold text-xs transition cursor-pointer whitespace-nowrap"
             >
               Execute Trade Proposal
             </button>
@@ -278,6 +329,8 @@ export function TradeCenterView({
                 {side.roster.map((p) => {
                   const active = side.selPlayers.includes(p.id);
                   const val = getPlayerTradeValue(p);
+                  const sal = getPlayerSalary(p);
+                  const yrs = getPlayerContractYears(p);
                   return (
                     <div
                       key={p.id}
@@ -302,8 +355,11 @@ export function TradeCenterView({
                         </span>
                         <span className="text-[11px] font-mono text-slate-500">({p.age}y)</span>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-[11px] font-mono text-slate-400">{val}p</span>
+                      <div className="flex items-center gap-2 shrink-0 font-mono tabular-nums">
+                        <span className="text-[11px] text-slate-300">
+                          {formatMoney(sal)}/{yrs}y
+                        </span>
+                        <span className="text-[11px] text-slate-500">{val}p</span>
                         <RatingBadge value={p.ovr} />
                       </div>
                     </div>
@@ -317,3 +373,4 @@ export function TradeCenterView({
     </div>
   );
 }
+

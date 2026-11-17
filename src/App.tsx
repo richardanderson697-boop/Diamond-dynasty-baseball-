@@ -6,6 +6,7 @@ import {
   BarChart3,
   Check,
   Cloud,
+  Download,
   ExternalLink,
   FastForward,
   FileText,
@@ -24,6 +25,7 @@ import {
   TrendingUp,
   Trophy,
   Tv,
+  Upload,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -38,17 +40,32 @@ import {
 } from './firebase';
 import {
   buildSeasonSnapshotData,
+  calculateExtensionOffer,
+  calculateFairSalary,
   calculateOverall,
-  clamp,
+  computeReleaseDeadCap,
   computeUpdatedRecords,
   createEmptySeasonStats,
   createInitialLeague,
+  evaluateTradeProposal,
+  formatMoney,
   generateInitialPlayerPool,
   generateRookieClass,
   generateSeasonSchedule,
-  getDraftPickTradeValue,
+  getPlayerContractYears,
+  getPlayerSalary,
   getPlayerTradeValue,
+  getRookieContractSalary,
+  getTeamPayrollSummary,
+  HARD_SALARY_CAP,
+  MIN_PLAYER_SALARY,
+  normalizeLoadedPlayers,
+  normalizeLoadedTeams,
   resetPlayerCounter,
+  ROOKIE_CONTRACT_YEARS,
+  roundMoney,
+  runAIOffseasonFreeAgency,
+  runOffseasonRollover,
   ScheduleDay,
   selectBestDraftPickForAI,
   simulatePlayoffs,
@@ -57,24 +74,29 @@ import {
 } from './engine/baseballEngine';
 import {
   deleteFranchiseFromCloud,
-  deleteLocalFranchiseBackup,
-  deleteSavedPlayerCard,
   isCloudQuotaPaused,
-  listLocalFranchiseBackups,
   loadFranchiseChunksFromCloud,
-  loadLocalFranchiseBackup,
   LocalBackupMeta,
-  recordSeasonSnapshot,
   resetCloudQuotaPause,
   saveFullFranchiseToCloud,
-  saveLocalFranchiseBackup,
   subscribeToFranchises,
   subscribeToLeagueRecords,
   subscribeToSavedPlayers,
   subscribeToSeasonSnapshots,
-  upsertLeagueRecords,
-  upsertSavedPlayerCard,
 } from './services/firestoreService';
+import {
+  CloudSyncMode,
+  deleteFranchiseFromIndexedDb,
+  exportFranchiseToJsonFile,
+  getCloudSyncMode,
+  listFranchisesFromIndexedDb,
+  loadFranchiseFromIndexedDb,
+  markFranchiseCloudSyncedInDb,
+  parseImportedFranchiseFile,
+  saveFranchiseToIndexedDb,
+  setCloudSyncMode,
+  StoredFranchiseRecord,
+} from './services/localDbService';
 import {
   CardTheme,
   ChampionHistoryEntry,
@@ -88,6 +110,7 @@ import {
   PlayerPosition,
   PlayoffResults,
   RecentGameEntry,
+  RetiredPlayerSummary,
   SavedPlayerCard,
   SeasonSnapshot,
   Team,
@@ -105,20 +128,26 @@ import { TradeCenterView } from './components/TradeCenterView';
 import { DraftRoomView } from './components/DraftRoomView';
 import { TransactionsLogView } from './components/TransactionsLogView';
 import { LiveGameCanvas, LiveGameResult } from './components/LiveGameCanvas';
+import { RetirementsModal } from './components/RetirementsModal';
+import { OffseasonFreeAgencyView } from './components/OffseasonFreeAgencyView';
 
 export default function App() {
   // Firebase Auth State
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
 
-  // Cloud Franchise Registry & Sync State
+  // Cloud Franchise Registry & Local-First Sync State
   const [cloudFranchises, setCloudFranchises] = useState<FranchiseSummary[]>([]);
-  const [localBackups, setLocalBackups] = useState<LocalBackupMeta[]>(() => listLocalFranchiseBackups());
+  const [localBackups, setLocalBackups] = useState<Array<LocalBackupMeta & { lastCloudSyncMs?: number }>>([]);
   const [activeFranchiseId, setActiveFranchiseId] = useState<string | null>(null);
+  const [cloudSyncMode, setCloudSyncModeState] = useState<CloudSyncMode>(() => getCloudSyncMode());
+  const [hasUnsyncedCloudChanges, setHasUnsyncedCloudChanges] = useState(false);
+  const [loadedFromLegacyCloud, setLoadedFromLegacyCloud] = useState(false);
   const [syncState, setSyncState] = useState<'idle' | 'saving' | 'synced' | 'quota' | 'error'>(() =>
     isCloudQuotaPaused() ? 'quota' : 'idle'
   );
   const [loadingFranchiseId, setLoadingFranchiseId] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   // Game Lifecycle States
   const [phase, setPhase] = useState<GamePhase>('SETUP');
@@ -152,6 +181,12 @@ export default function App() {
   // UI Navigation & Modals
   const [activeTab, setActiveTab] = useState('dashboard');
   const [selectedPlayer, setSelectedPlayer] = useState<Player | null>(null);
+  const [retirementsSummary, setRetirementsSummary] = useState<{
+    year: number;
+    retirements: RetiredPlayerSummary[];
+    expiringUserCount: number;
+    aiReSignedCount: number;
+  } | null>(null);
   const [toastMsg, setToastMsg] = useState<{ text: string; type: string; id: number } | null>(null);
 
   const showToast = useCallback((text: string, type = 'info') => {
@@ -164,6 +199,11 @@ export default function App() {
     return () => clearTimeout(t);
   }, [toastMsg]);
 
+  // Load On-Device IndexedDB Dynasties on Startup
+  useEffect(() => {
+    void listFranchisesFromIndexedDb().then(setLocalBackups);
+  }, []);
+
   // Auth & Quota Listeners
   useEffect(() => {
     const unsubAuth = onAuthStateChanged(auth, (u) => {
@@ -172,7 +212,7 @@ export default function App() {
     });
     const unsubQuota = subscribeQuotaExceeded(() => {
       setSyncState('quota');
-      showToast('Daily Firestore write quota reached. Progress is auto-saved locally.', 'warning');
+      showToast('Daily Firestore write quota reached. On-device IndexedDB auto-save remains active.', 'warning');
     });
     return () => {
       unsubAuth();
@@ -180,7 +220,7 @@ export default function App() {
     };
   }, [showToast]);
 
-  // Real-time Franchises List Subscription
+  // Real-time Franchises List Subscription (metadata list only)
   useEffect(() => {
     if (!authReady || !authUser) {
       setCloudFranchises([]);
@@ -192,9 +232,9 @@ export default function App() {
     return () => unsub();
   }, [authReady, authUser]);
 
-  // Real-time Subcollection Subscriptions for Active Franchise
+  // Legacy Subcollection Subscriptions (only used if resuming an older pre-bundle cloud save)
   useEffect(() => {
-    if (!authReady || !authUser || !activeFranchiseId) return;
+    if (!loadedFromLegacyCloud || !authReady || !authUser || !activeFranchiseId) return;
     const unsubCards = subscribeToSavedPlayers(activeFranchiseId, authUser.uid, setSavedCards);
     const unsubSnaps = subscribeToSeasonSnapshots(activeFranchiseId, authUser.uid, setSeasonSnapshots);
     const unsubRecs = subscribeToLeagueRecords(activeFranchiseId, authUser.uid, setLeagueRecords);
@@ -204,12 +244,12 @@ export default function App() {
       unsubSnaps();
       unsubRecs();
     };
-  }, [authReady, authUser, activeFranchiseId]);
+  }, [loadedFromLegacyCloud, authReady, authUser, activeFranchiseId]);
 
   const handleSignIn = async () => {
     try {
       await signInWithPopup(auth, googleProvider);
-      showToast('Signed in with Google. Cloud sync enabled.', 'success');
+      showToast('Signed in with Google. Manual & checkpoint Cloud Backup ready.', 'success');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Google Sign-In failed.', 'error');
     }
@@ -217,9 +257,9 @@ export default function App() {
 
   const handleSignOut = async () => {
     await signOut(auth);
-    setActiveFranchiseId(null);
+    setLoadedFromLegacyCloud(false);
     setSyncState('idle');
-    showToast('Signed out of Firebase.', 'info');
+    showToast('Signed out of Firebase. On-device saves remain available.', 'info');
   };
 
   const addTransaction = useCallback(
@@ -255,7 +295,7 @@ export default function App() {
     [showToast]
   );
 
-  // Cloud + Local Auto-Save Helper (minimizes Firestore write units on routine ticks)
+  // Local-First (IndexedDB) Auto-Save + Optional / Explicit Gzipped Cloud Backup
   const syncFranchiseSnapshotRef = useRef(0);
   const persistToCloud = useCallback(
     async (overrides?: Partial<{
@@ -265,6 +305,8 @@ export default function App() {
       includePlayers: boolean;
       includeScheduleAndDraft: boolean;
       skipCloud: boolean;
+      forceCloud: boolean;
+      isSeasonMilestone: boolean;
       phase: GamePhase;
       year: number;
       currentDay: number;
@@ -285,7 +327,7 @@ export default function App() {
       leagueRecords: LeagueRecord[];
     }>) => {
       const targetUserTeamId = overrides?.userTeamId ?? userTeamId;
-      const fid = overrides?.franchiseId ?? activeFranchiseId ?? `LOCAL_${targetUserTeamId}`;
+      const fid = overrides?.franchiseId ?? activeFranchiseId ?? `FRAN_${targetUserTeamId}_${Date.now()}`;
       const tList = overrides?.teams ?? teams;
       const uTeam = tList.find((t) => t.id === targetUserTeamId);
       const franchiseName = uTeam ? `${uTeam.city} ${uTeam.name} Dynasty` : `${targetUserTeamId} Dynasty`;
@@ -310,45 +352,70 @@ export default function App() {
         draftPicks: overrides?.draftPicks ?? draftPicks,
         draftOrder: overrides?.draftOrder ?? draftOrder,
         draftHistory: overrides?.draftHistory ?? draftHistory,
-      };
-
-      // Always write compact local backup first so state is never lost
-      saveLocalFranchiseBackup({
-        ...fullData,
-        playoffResults: fullData.playoffResults ?? null,
         savedCards: overrides?.savedCards ?? savedCards,
         seasonSnapshots: overrides?.seasonSnapshots ?? seasonSnapshots,
         leagueRecords: overrides?.leagueRecords ?? leagueRecords,
-        savedAtMs: Date.now(),
-      });
-      setLocalBackups(listLocalFranchiseBackups());
+      };
 
-      if (!authUser || (!activeFranchiseId && !overrides?.franchiseId)) return;
-      if (overrides?.skipCloud) return;
+      const nowMs = Date.now();
+      const localRecord: StoredFranchiseRecord = {
+        ...fullData,
+        playoffResults: fullData.playoffResults ?? null,
+        savedCards: fullData.savedCards || [],
+        seasonSnapshots: fullData.seasonSnapshots || [],
+        leagueRecords: fullData.leagueRecords || [],
+        savedAtMs: nowMs,
+      };
 
-      if (isCloudQuotaPaused()) {
-        setSyncState('quota');
+      // Always write immediately to IndexedDB (zero cloud writes, offline-ready)
+      await saveFranchiseToIndexedDb(localRecord);
+      const updatedList = await listFranchisesFromIndexedDb();
+      setLocalBackups(updatedList);
+
+      const shouldWriteCloud =
+        Boolean(authUser) &&
+        !overrides?.skipCloud &&
+        !isCloudQuotaPaused() &&
+        (Boolean(overrides?.forceCloud) ||
+          (cloudSyncMode === 'season' && Boolean(overrides?.isSeasonMilestone)));
+
+      if (!shouldWriteCloud) {
+        if (!overrides?.forceCloud) {
+          setHasUnsyncedCloudChanges(true);
+        }
+        if (isCloudQuotaPaused()) {
+          setSyncState('quota');
+        }
         return;
       }
 
       const seq = ++syncFranchiseSnapshotRef.current;
       setSyncState('saving');
       try {
-        await saveFullFranchiseToCloud(fullData, {
-          isNew: Boolean(overrides?.isNew),
-          includePlayers: overrides?.includePlayers ?? true,
-          includeScheduleAndDraft: overrides?.includeScheduleAndDraft ?? Boolean(overrides?.isNew),
+        const res = await saveFullFranchiseToCloud(fullData, {
+          isNew: false,
+          includePlayers: true,
+          includeScheduleAndDraft: true,
         });
+        await markFranchiseCloudSyncedInDb(fid, nowMs);
+        setLocalBackups(await listFranchisesFromIndexedDb());
         if (seq === syncFranchiseSnapshotRef.current) {
           setSyncState('synced');
+          setHasUnsyncedCloudChanges(false);
+        }
+        if (overrides?.forceCloud && res.compressedBytes > 0) {
+          const kb = Math.max(1, Math.round(res.compressedBytes / 1024));
+          showToast(`Cloud Backup complete (${kb} KB gzipped, 2 Firestore writes).`, 'success');
         }
       } catch (err) {
+        setHasUnsyncedCloudChanges(true);
         handleCloudWriteError(err);
       }
     },
     [
       authUser,
       activeFranchiseId,
+      cloudSyncMode,
       teams,
       userTeamId,
       year,
@@ -369,8 +436,36 @@ export default function App() {
       seasonSnapshots,
       leagueRecords,
       handleCloudWriteError,
+      showToast,
     ]
   );
+
+  const handleToggleSyncMode = () => {
+    const next: CloudSyncMode = cloudSyncMode === 'manual' ? 'season' : 'manual';
+    setCloudSyncMode(next);
+    setCloudSyncModeState(next);
+    showToast(
+      next === 'manual'
+        ? 'Cloud Sync set to Manual Only (0 automatic Firestore writes).'
+        : 'Cloud Sync set to Season Checkpoints (1 compressed backup at Draft/Season End).',
+      'info'
+    );
+  };
+
+  const handleBackupToCloud = async () => {
+    if (!authUser) {
+      await handleSignIn();
+      return;
+    }
+    if (isCloudQuotaPaused()) {
+      await resetCloudQuotaPause();
+    }
+    await persistToCloud({
+      forceCloud: true,
+      includePlayers: true,
+      includeScheduleAndDraft: true,
+    });
+  };
 
   const handleRetryCloudSync = async () => {
     if (!authUser || !activeFranchiseId) return;
@@ -378,14 +473,98 @@ export default function App() {
     setSyncState('saving');
     try {
       await persistToCloud({
+        forceCloud: true,
         includePlayers: true,
         includeScheduleAndDraft: true,
       });
-      if (!isCloudQuotaPaused()) {
-        showToast('Cloud sync restored.', 'success');
-      }
     } catch (err) {
       handleCloudWriteError(err);
+    }
+  };
+
+  const handleExportCurrentFranchise = () => {
+    const fid = activeFranchiseId ?? `FRAN_${userTeamId}_${Date.now()}`;
+    const uTeam = teamMap[userTeamId];
+    const franchiseName = uTeam ? `${uTeam.city} ${uTeam.name} Dynasty` : `${userTeamId} Dynasty`;
+    exportFranchiseToJsonFile({
+      franchiseId: fid,
+      ownerId: authUser?.uid || 'local',
+      name: franchiseName,
+      userTeamId,
+      year,
+      phase,
+      currentDay,
+      currentPickIdx,
+      teams,
+      players,
+      draftPool,
+      schedule,
+      draftPicks,
+      draftOrder,
+      draftHistory,
+      playoffResults: playoffResults ?? null,
+      championsHistory,
+      transactions,
+      recentGames,
+      savedCards,
+      seasonSnapshots,
+      leagueRecords,
+      savedAtMs: Date.now(),
+    });
+    showToast('Exported dynasty save file (.ddgm.json).', 'success');
+  };
+
+  const handleExportLocalFranchiseById = async (franchiseId: string) => {
+    const rec = await loadFranchiseFromIndexedDb(franchiseId);
+    if (!rec) {
+      showToast('Could not locate on-device save to export.', 'error');
+      return;
+    }
+    exportFranchiseToJsonFile(rec);
+    showToast(`Exported ${rec.name} (.ddgm.json).`, 'success');
+  };
+
+  const handleImportSaveFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const rec = await parseImportedFranchiseFile(file);
+      await saveFranchiseToIndexedDb(rec);
+      setLocalBackups(await listFranchisesFromIndexedDb());
+      setUserTeamId(rec.userTeamId);
+      setYear(rec.year);
+      setPhase(rec.phase);
+      setCurrentDay(rec.currentDay);
+      setCurrentPickIdx(rec.currentPickIdx);
+      setTeams(rec.teams);
+      setPlayers(rec.players);
+      setDraftPool(rec.draftPool);
+      setSchedule(rec.schedule);
+      setDraftPicks(rec.draftPicks);
+      setDraftOrder(rec.draftOrder);
+      setDraftHistory(rec.draftHistory);
+      setPlayoffResults(rec.playoffResults);
+      setChampionsHistory(rec.championsHistory);
+      setTransactions(rec.transactions);
+      setRecentGames(rec.recentGames);
+      setSavedCards(rec.savedCards || []);
+      setSeasonSnapshots(rec.seasonSnapshots || []);
+      setLeagueRecords(rec.leagueRecords || []);
+      setActiveFranchiseId(rec.franchiseId);
+      setLoadedFromLegacyCloud(false);
+      setHasUnsyncedCloudChanges(true);
+      setSyncState(isCloudQuotaPaused() ? 'quota' : 'idle');
+      setActiveTab(
+        rec.phase === 'INAUGURAL_DRAFT' || rec.phase === 'ROOKIE_DRAFT'
+          ? 'draft'
+          : rec.phase === 'OFFSEASON_FA'
+          ? 'offseason'
+          : 'dashboard'
+      );
+      showToast(`Imported ${rec.name} (${rec.year} · Day ${rec.currentDay}).`, 'success');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to import save file.', 'error');
     }
   };
 
@@ -414,6 +593,11 @@ export default function App() {
     waivers.sort((a, b) => b.ovr - a.ovr);
     return { byTeam: map, waivers };
   }, [players, teams]);
+
+  const userCapSummary = useMemo(
+    () => getTeamPayrollSummary(userTeam, playersByTeam.byTeam[userTeamId] || []),
+    [userTeam, playersByTeam, userTeamId]
+  );
 
   const todayUserMatchup = useMemo(() => {
     if (phase !== 'REGULAR_SEASON' || currentDay >= 162) return null;
@@ -483,66 +667,40 @@ export default function App() {
     setLeagueRecords([]);
     setPhase('INAUGURAL_DRAFT');
     setActiveTab('draft');
+    setActiveFranchiseId(newFranchiseId);
+    setLoadedFromLegacyCloud(false);
+    setHasUnsyncedCloudChanges(true);
 
-    if (authUser) {
-      setActiveFranchiseId(newFranchiseId);
-      await persistToCloud({
-        franchiseId: newFranchiseId,
-        userTeamId: chosenTeamId,
-        isNew: true,
-        includePlayers: true,
-        includeScheduleAndDraft: true,
-        phase: 'INAUGURAL_DRAFT',
-        year: 2026,
-        currentDay: 0,
-        currentPickIdx: 0,
-        teams: initTeams,
-        players: [],
-        draftPool: pool,
-        schedule: sched,
-        draftPicks: initPicks,
-        draftOrder: order,
-        draftHistory: [],
-        playoffResults: null,
-        championsHistory: [],
-        transactions: initTx,
-        recentGames: [],
-        savedCards: [],
-        seasonSnapshots: [],
-        leagueRecords: [],
-      });
-    } else {
-      setActiveFranchiseId(null);
-      void persistToCloud({
-        franchiseId: newFranchiseId,
-        userTeamId: chosenTeamId,
-        skipCloud: true,
-        phase: 'INAUGURAL_DRAFT',
-        year: 2026,
-        currentDay: 0,
-        currentPickIdx: 0,
-        teams: initTeams,
-        players: [],
-        draftPool: pool,
-        schedule: sched,
-        draftPicks: initPicks,
-        draftOrder: order,
-        draftHistory: [],
-        playoffResults: null,
-        championsHistory: [],
-        transactions: initTx,
-        recentGames: [],
-        savedCards: [],
-        seasonSnapshots: [],
-        leagueRecords: [],
-      });
-    }
+    // Save immediately to on-device IndexedDB (0 Firestore writes on creation)
+    await persistToCloud({
+      franchiseId: newFranchiseId,
+      userTeamId: chosenTeamId,
+      skipCloud: true,
+      phase: 'INAUGURAL_DRAFT',
+      year: 2026,
+      currentDay: 0,
+      currentPickIdx: 0,
+      teams: initTeams,
+      players: [],
+      draftPool: pool,
+      schedule: sched,
+      draftPicks: initPicks,
+      draftOrder: order,
+      draftHistory: [],
+      playoffResults: null,
+      championsHistory: [],
+      transactions: initTx,
+      recentGames: [],
+      savedCards: [],
+      seasonSnapshots: [],
+      leagueRecords: [],
+    });
   };
 
-  const resumeLocalBackup = (franchiseId: string) => {
-    const backup = loadLocalFranchiseBackup(franchiseId);
+  const resumeLocalBackup = async (franchiseId: string) => {
+    const backup = await loadFranchiseFromIndexedDb(franchiseId);
     if (!backup) {
-      showToast('Local dynasty backup not found.', 'error');
+      showToast('On-device dynasty save not found.', 'error');
       return;
     }
     setUserTeamId(backup.userTeamId);
@@ -550,9 +708,9 @@ export default function App() {
     setPhase(backup.phase);
     setCurrentDay(backup.currentDay);
     setCurrentPickIdx(backup.currentPickIdx);
-    setTeams(backup.teams);
-    setPlayers(backup.players);
-    setDraftPool(backup.draftPool);
+    setTeams(normalizeLoadedTeams(backup.teams || []));
+    setPlayers(normalizeLoadedPlayers(backup.players || []));
+    setDraftPool(normalizeLoadedPlayers(backup.draftPool || []));
     setSchedule(backup.schedule);
     setDraftPicks(backup.draftPicks);
     setDraftOrder(backup.draftOrder);
@@ -564,68 +722,117 @@ export default function App() {
     setSavedCards(backup.savedCards || []);
     setSeasonSnapshots(backup.seasonSnapshots || []);
     setLeagueRecords(backup.leagueRecords || []);
-    setActiveFranchiseId(backup.franchiseId.startsWith('FRAN_') ? backup.franchiseId : null);
-    setSyncState(isCloudQuotaPaused() ? 'quota' : 'idle');
+    setActiveFranchiseId(backup.franchiseId);
+    setLoadedFromLegacyCloud(false);
+    const unsynced = !backup.lastCloudSyncMs || backup.savedAtMs > backup.lastCloudSyncMs;
+    setHasUnsyncedCloudChanges(unsynced);
+    setSyncState(isCloudQuotaPaused() ? 'quota' : unsynced ? 'idle' : 'synced');
     setActiveTab(
-      backup.phase === 'INAUGURAL_DRAFT' || backup.phase === 'ROOKIE_DRAFT' ? 'draft' : 'dashboard'
+      backup.phase === 'INAUGURAL_DRAFT' || backup.phase === 'ROOKIE_DRAFT'
+        ? 'draft'
+        : backup.phase === 'OFFSEASON_FA'
+        ? 'offseason'
+        : 'dashboard'
     );
-    showToast(`Loaded local auto-save: ${backup.name} (${backup.year} · Day ${backup.currentDay}).`, 'info');
+    showToast(`Loaded on-device dynasty: ${backup.name} (${backup.year} · Day ${backup.currentDay}).`, 'info');
   };
 
   const resumeCloudFranchise = async (franchise: FranchiseSummary) => {
     if (!authUser) return;
     setLoadingFranchiseId(franchise.id);
     try {
-      const localBackup = loadLocalFranchiseBackup(franchise.id);
+      const localBackup = await loadFranchiseFromIndexedDb(franchise.id);
       const localIsAhead =
         localBackup &&
         (localBackup.year > franchise.year ||
           (localBackup.year === franchise.year && localBackup.currentDay > franchise.currentDay));
 
       if (localIsAhead && localBackup) {
-        resumeLocalBackup(franchise.id);
-        setActiveFranchiseId(franchise.id);
+        await resumeLocalBackup(franchise.id);
         showToast(
-          `Resumed newer local auto-save (${localBackup.year} · Day ${localBackup.currentDay}).`,
+          `Resumed newer on-device save (${localBackup.year} · Day ${localBackup.currentDay}).`,
           'info'
         );
         return;
       }
 
       const chunks = await loadFranchiseChunksFromCloud(franchise.id, authUser.uid);
+      const normTeams = normalizeLoadedTeams(franchise.teams || []);
+      const normPlayers = normalizeLoadedPlayers(chunks.players);
+      const normPool = normalizeLoadedPlayers(chunks.draftPool);
+
       setUserTeamId(franchise.userTeamId);
       setYear(franchise.year);
       setPhase(franchise.phase);
       setCurrentDay(franchise.currentDay);
       setCurrentPickIdx(franchise.currentPickIdx);
-      setTeams(franchise.teams || []);
+      setTeams(normTeams);
       setChampionsHistory(franchise.championsHistory || []);
       setTransactions(franchise.transactions || []);
       setRecentGames(franchise.recentGames || []);
       setPlayoffResults(franchise.playoffResults || null);
 
-      setPlayers(chunks.players);
-      setDraftPool(chunks.draftPool);
+      setPlayers(normPlayers);
+      setDraftPool(normPool);
       setSchedule(chunks.schedule);
       setDraftPicks(chunks.draftPicks);
       setDraftOrder(chunks.draftOrder);
       setDraftHistory(chunks.draftHistory);
 
+      const isBundle = chunks.savedCards !== undefined || chunks.seasonSnapshots !== undefined;
+      if (chunks.savedCards) setSavedCards(chunks.savedCards);
+      if (chunks.seasonSnapshots) setSeasonSnapshots(chunks.seasonSnapshots);
+      if (chunks.leagueRecords) setLeagueRecords(chunks.leagueRecords);
+      setLoadedFromLegacyCloud(!isBundle);
+
+      // Cache locally in IndexedDB so subsequent gameplay requires 0 cloud writes
+      const nowMs = Date.now();
+      await saveFranchiseToIndexedDb({
+        franchiseId: franchise.id,
+        ownerId: authUser.uid,
+        name: franchise.name,
+        userTeamId: franchise.userTeamId,
+        year: franchise.year,
+        phase: franchise.phase,
+        currentDay: franchise.currentDay,
+        currentPickIdx: franchise.currentPickIdx,
+        teams: normTeams,
+        players: normPlayers,
+        draftPool: normPool,
+        schedule: chunks.schedule,
+        draftPicks: chunks.draftPicks,
+        draftOrder: chunks.draftOrder,
+        draftHistory: chunks.draftHistory,
+        playoffResults: franchise.playoffResults || null,
+        championsHistory: franchise.championsHistory || [],
+        transactions: franchise.transactions || [],
+        recentGames: franchise.recentGames || [],
+        savedCards: chunks.savedCards || [],
+        seasonSnapshots: chunks.seasonSnapshots || [],
+        leagueRecords: chunks.leagueRecords || [],
+        savedAtMs: nowMs,
+        lastCloudSyncMs: nowMs,
+      });
+      setLocalBackups(await listFranchisesFromIndexedDb());
+
       setActiveFranchiseId(franchise.id);
+      setHasUnsyncedCloudChanges(false);
       setSyncState(isCloudQuotaPaused() ? 'quota' : 'synced');
       setActiveTab(
         franchise.phase === 'INAUGURAL_DRAFT' || franchise.phase === 'ROOKIE_DRAFT'
           ? 'draft'
+          : franchise.phase === 'OFFSEASON_FA'
+          ? 'offseason'
           : 'dashboard'
       );
       showToast(`Loaded ${franchise.name} (${franchise.year} · Day ${franchise.currentDay}).`, 'success');
     } catch (err) {
-      const localBackup = loadLocalFranchiseBackup(franchise.id);
+      const localBackup = await loadFranchiseFromIndexedDb(franchise.id);
       if (localBackup) {
-        resumeLocalBackup(franchise.id);
+        await resumeLocalBackup(franchise.id);
         return;
       }
-      showToast('Failed to load franchise chunks from Firestore.', 'error');
+      showToast('Failed to load franchise from Firestore.', 'error');
       console.error(err);
     } finally {
       setLoadingFranchiseId(null);
@@ -635,8 +842,8 @@ export default function App() {
   const handleDeleteCloudFranchise = async (franchiseId: string) => {
     try {
       await deleteFranchiseFromCloud(franchiseId);
-      deleteLocalFranchiseBackup(franchiseId);
-      setLocalBackups(listLocalFranchiseBackups());
+      await deleteFranchiseFromIndexedDb(franchiseId);
+      setLocalBackups(await listFranchisesFromIndexedDb());
       if (activeFranchiseId === franchiseId) {
         setActiveFranchiseId(null);
         setPhase('SETUP');
@@ -647,10 +854,10 @@ export default function App() {
     }
   };
 
-  const handleDeleteLocalBackup = (franchiseId: string) => {
-    deleteLocalFranchiseBackup(franchiseId);
-    setLocalBackups(listLocalFranchiseBackups());
-    showToast('Local auto-save removed.', 'info');
+  const handleDeleteLocalBackup = async (franchiseId: string) => {
+    await deleteFranchiseFromIndexedDb(franchiseId);
+    setLocalBackups(await listFranchisesFromIndexedDb());
+    showToast('On-device dynasty removed.', 'info');
   };
 
   // ==========================================================================
@@ -658,18 +865,71 @@ export default function App() {
   // ==========================================================================
 
   const executeSingleDraftPick = useCallback(
-    (chosenPlayerId: string | null, currentIdx: number, currentPool: Player[], currentPlayers: Player[]) => {
+    (
+      chosenPlayerId: string | null,
+      currentIdx: number,
+      currentPool: Player[],
+      currentPlayers: Player[],
+      isRookieDraft: boolean
+    ) => {
       const slot = draftOrder[currentIdx];
       if (!slot) return null;
 
+      const slotTeam = teamMap[slot.teamId];
       const teamRoster = currentPlayers.filter((p) => p.teamId === slot.teamId);
-      let pickedPlayer = chosenPlayerId
-        ? currentPool.find((p) => p.id === chosenPlayerId)
-        : selectBestDraftPickForAI(currentPool, teamRoster);
+      const teamSummary = getTeamPayrollSummary(slotTeam, teamRoster);
 
-      if (!pickedPlayer) pickedPlayer = currentPool[0];
+      let pickedPlayer: Player | null = null;
+      if (chosenPlayerId) {
+        const candidate = currentPool.find((p) => p.id === chosenPlayerId) || null;
+        if (!candidate) return null;
+        const cost = isRookieDraft
+          ? getRookieContractSalary(slot.round)
+          : getPlayerSalary(candidate);
+        const reserve = isRookieDraft
+          ? 0
+          : roundMoney(Math.max(0, 30 - teamRoster.length - 1) * MIN_PLAYER_SALARY);
+        if (roundMoney(teamSummary.totalPayroll + cost + reserve) > HARD_SALARY_CAP) {
+          showToast(
+            `Draft pick blocked: exceeds $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap (or leaves too little cap for remaining roster slots).`,
+            'error'
+          );
+          return null;
+        }
+        pickedPlayer = candidate;
+      } else {
+        pickedPlayer = selectBestDraftPickForAI(currentPool, teamRoster, {
+          team: slotTeam,
+          isRookieDraft,
+          round: slot.round,
+          targetRosterSize: 30,
+        });
+      }
 
-      const updatedPlayer: Player = { ...pickedPlayer, teamId: slot.teamId };
+      // If AI cannot afford a Rookie Draft slot under $180M, forfeit/pass cleanly without violating cap
+      if (!pickedPlayer) {
+        return {
+          nextIdx: currentIdx + 1,
+          nextPool: currentPool,
+          nextPlayers: currentPlayers,
+          historyEntry: null as DraftHistoryEntry | null,
+        };
+      }
+
+      const updatedPlayer: Player = isRookieDraft
+        ? {
+            ...pickedPlayer,
+            teamId: slot.teamId,
+            previousTeamId: slot.teamId,
+            salary: getRookieContractSalary(slot.round),
+            contractYears: ROOKIE_CONTRACT_YEARS,
+          }
+        : {
+            ...pickedPlayer,
+            teamId: slot.teamId,
+            previousTeamId: slot.teamId,
+          };
+
       const nextPool = currentPool.filter((p) => p.id !== pickedPlayer.id);
       const nextPlayers = [...currentPlayers, updatedPlayer];
       const historyEntry: DraftHistoryEntry = {
@@ -684,12 +944,17 @@ export default function App() {
         historyEntry,
       };
     },
-    [draftOrder]
+    [draftOrder, teamMap, showToast]
   );
 
   const finishActiveDraft = useCallback(
     (finalPlayers: Player[], remainingPool: Player[], isRookie: boolean, nextHist: DraftHistoryEntry[]) => {
-      const waiverPlayers = remainingPool.map((p) => ({ ...p, teamId: null }));
+      const waiverPlayers = remainingPool.map((p) => ({
+        ...p,
+        teamId: null,
+        salary: getPlayerSalary(p),
+        contractYears: getPlayerContractYears(p),
+      }));
       const mergedPlayers = [...finalPlayers, ...waiverPlayers];
 
       if (!isRookie) {
@@ -698,7 +963,7 @@ export default function App() {
           year,
           day: 0,
           category: 'DRAFT',
-          summary: `Inaugural 30-Round Draft complete. 960 players drafted; ${waiverPlayers.length} placed on Waiver Wire.`,
+          summary: `Inaugural 30-Round Draft complete under $180.0M cap. 960 players drafted; ${waiverPlayers.length} placed on Waiver Wire.`,
         };
         const updatedTx = [txEntry, ...transactions.slice(0, 148)];
         setPlayers(mergedPlayers);
@@ -708,6 +973,7 @@ export default function App() {
         setTransactions(updatedTx);
         showToast('Inaugural Draft Complete. Opening Day is ready.', 'success');
         void persistToCloud({
+          isSeasonMilestone: true,
           phase: 'REGULAR_SEASON',
           includePlayers: true,
           includeScheduleAndDraft: true,
@@ -744,13 +1010,15 @@ export default function App() {
         });
 
         const finalCombined = [...trimmedPlayers, ...userRoster];
-        const nextPhase: GamePhase = userRoster.length > 30 ? 'ROSTER_CUTS' : 'REGULAR_SEASON';
+        const uSummary = getTeamPayrollSummary(teamMap[userTeamId], userRoster);
+        const needsCuts = userRoster.length > 30 || uSummary.overCap;
+        const nextPhase: GamePhase = needsCuts ? 'ROSTER_CUTS' : 'REGULAR_SEASON';
         const txEntry: TransactionEntry = {
           id: `rdraft-done-${Date.now()}`,
           year,
           day: 0,
           category: 'DRAFT',
-          summary: `${year} Rookie Draft concluded. Remaining prospects added to Waiver Pool.`,
+          summary: `${year} Rookie Draft concluded (3-yr deals: $3.50M R1, $1.75M R2, $0.75M R3–R5). Remaining prospects added to Waiver Pool.`,
         };
         const updatedTx = [txEntry, ...transactions.slice(0, 148)];
 
@@ -761,12 +1029,16 @@ export default function App() {
         setActiveTab(nextPhase === 'ROSTER_CUTS' ? 'roster' : 'dashboard');
 
         if (nextPhase === 'ROSTER_CUTS') {
-          showToast(`Rookie Draft complete. Trim your roster from ${userRoster.length} down to 30 players.`, 'warning');
+          showToast(
+            `Rookie Draft complete. Ensure roster <= 30 (${userRoster.length}/30) and <= $180.0M (${formatMoney(uSummary.totalPayroll)}).`,
+            'warning'
+          );
         } else {
           showToast(`${year} Regular Season is ready.`, 'success');
         }
 
         void persistToCloud({
+          isSeasonMilestone: true,
           phase: nextPhase,
           includePlayers: true,
           includeScheduleAndDraft: true,
@@ -778,20 +1050,21 @@ export default function App() {
         });
       }
     },
-    [draftOrder.length, persistToCloud, showToast, transactions, userTeamId, year]
+    [draftOrder.length, persistToCloud, showToast, teamMap, transactions, userTeamId, year]
   );
 
   const handleUserDraftSelect = (playerId: string) => {
     const slot = draftOrder[currentPickIdx];
     if (!slot || slot.teamId !== userTeamId) return;
 
-    const res = executeSingleDraftPick(playerId, currentPickIdx, draftPool, players);
+    const isRookie = phase === 'ROOKIE_DRAFT';
+    const res = executeSingleDraftPick(playerId, currentPickIdx, draftPool, players, isRookie);
     if (!res) return;
 
-    const nextHist = [res.historyEntry, ...draftHistory];
+    const nextHist = res.historyEntry ? [res.historyEntry, ...draftHistory] : draftHistory;
     setDraftHistory(nextHist);
     if (res.nextIdx >= draftOrder.length) {
-      finishActiveDraft(res.nextPlayers, res.nextPool, phase === 'ROOKIE_DRAFT', nextHist);
+      finishActiveDraft(res.nextPlayers, res.nextPool, isRookie, nextHist);
     } else {
       setCurrentPickIdx(res.nextIdx);
       setDraftPool(res.nextPool);
@@ -799,15 +1072,29 @@ export default function App() {
     }
   };
 
+  const handlePassUserDraftPick = () => {
+    const slot = draftOrder[currentPickIdx];
+    if (!slot || slot.teamId !== userTeamId) return;
+    const isRookie = phase === 'ROOKIE_DRAFT';
+    const nextIdx = currentPickIdx + 1;
+    addTransaction('DRAFT', `${userTeamId} passed Rd ${slot.round} Pick #${slot.pickNum} due to $180.0M Hard Cap.`);
+    if (nextIdx >= draftOrder.length) {
+      finishActiveDraft(players, draftPool, isRookie, draftHistory);
+    } else {
+      setCurrentPickIdx(nextIdx);
+    }
+  };
+
   const handleSimNextPick = () => {
     if (currentPickIdx >= draftOrder.length) return;
-    const res = executeSingleDraftPick(null, currentPickIdx, draftPool, players);
+    const isRookie = phase === 'ROOKIE_DRAFT';
+    const res = executeSingleDraftPick(null, currentPickIdx, draftPool, players, isRookie);
     if (!res) return;
 
-    const nextHist = [res.historyEntry, ...draftHistory];
+    const nextHist = res.historyEntry ? [res.historyEntry, ...draftHistory] : draftHistory;
     setDraftHistory(nextHist);
     if (res.nextIdx >= draftOrder.length) {
-      finishActiveDraft(res.nextPlayers, res.nextPool, phase === 'ROOKIE_DRAFT', nextHist);
+      finishActiveDraft(res.nextPlayers, res.nextPool, isRookie, nextHist);
     } else {
       setCurrentPickIdx(res.nextIdx);
       setDraftPool(res.nextPool);
@@ -816,34 +1103,35 @@ export default function App() {
   };
 
   const handleSimToUserTurn = () => {
+    const isRookie = phase === 'ROOKIE_DRAFT';
     let idx = currentPickIdx;
     let pool = draftPool;
     let plrs = players;
     const newHist: DraftHistoryEntry[] = [];
 
     if (idx < draftOrder.length && draftOrder[idx].teamId === userTeamId) {
-      const first = executeSingleDraftPick(null, idx, pool, plrs);
+      const first = executeSingleDraftPick(null, idx, pool, plrs, isRookie);
       if (first) {
         idx = first.nextIdx;
         pool = first.nextPool;
         plrs = first.nextPlayers;
-        newHist.unshift(first.historyEntry);
+        if (first.historyEntry) newHist.unshift(first.historyEntry);
       }
     }
 
     while (idx < draftOrder.length && draftOrder[idx].teamId !== userTeamId) {
-      const step = executeSingleDraftPick(null, idx, pool, plrs);
+      const step = executeSingleDraftPick(null, idx, pool, plrs, isRookie);
       if (!step) break;
       idx = step.nextIdx;
       pool = step.nextPool;
       plrs = step.nextPlayers;
-      newHist.unshift(step.historyEntry);
+      if (step.historyEntry) newHist.unshift(step.historyEntry);
     }
 
     const mergedHist = [...newHist, ...draftHistory];
     setDraftHistory(mergedHist);
     if (idx >= draftOrder.length) {
-      finishActiveDraft(plrs, pool, phase === 'ROOKIE_DRAFT', mergedHist);
+      finishActiveDraft(plrs, pool, isRookie, mergedHist);
     } else {
       setCurrentPickIdx(idx);
       setDraftPool(pool);
@@ -852,23 +1140,24 @@ export default function App() {
   };
 
   const handleAutoDraftAll = () => {
+    const isRookie = phase === 'ROOKIE_DRAFT';
     let idx = currentPickIdx;
     let pool = draftPool;
     let plrs = players;
     const newHist: DraftHistoryEntry[] = [];
 
     while (idx < draftOrder.length) {
-      const step = executeSingleDraftPick(null, idx, pool, plrs);
+      const step = executeSingleDraftPick(null, idx, pool, plrs, isRookie);
       if (!step) break;
       idx = step.nextIdx;
       pool = step.nextPool;
       plrs = step.nextPlayers;
-      newHist.unshift(step.historyEntry);
+      if (step.historyEntry) newHist.unshift(step.historyEntry);
     }
 
     const mergedHist = [...newHist, ...draftHistory];
     setDraftHistory(mergedHist);
-    finishActiveDraft(plrs, pool, phase === 'ROOKIE_DRAFT', mergedHist);
+    finishActiveDraft(plrs, pool, isRookie, mergedHist);
   };
 
   // ==========================================================================
@@ -968,9 +1257,21 @@ export default function App() {
           const aiTeams = workingTeams.filter((t) => t.id !== userTeamId);
           const randomAI = aiTeams[Math.floor(Math.random() * aiTeams.length)];
           const aiRoster = rosterLookup[randomAI.id].sort((a, b) => a.ovr - b.ovr);
-          const topFA = waivers[0];
+          const aiSummary = getTeamPayrollSummary(randomAI, aiRoster);
           const weakest = aiRoster[0];
-          if (topFA && weakest && topFA.ovr > weakest.ovr + 4) {
+          const topFA = waivers.find((cand) => {
+            if (!weakest || cand.ovr <= weakest.ovr + 4) return false;
+            const deadHit = computeReleaseDeadCap(weakest);
+            const post = roundMoney(
+              aiSummary.totalPayroll + getPlayerSalary(cand) - getPlayerSalary(weakest) + deadHit
+            );
+            return post <= HARD_SALARY_CAP;
+          });
+          if (topFA && weakest) {
+            const deadHit = computeReleaseDeadCap(weakest);
+            if (deadHit > 0) {
+              randomAI.deadCap = roundMoney((randomAI.deadCap || 0) + deadHit);
+            }
             topFA.teamId = randomAI.id;
             weakest.teamId = null;
             rosterLookup[randomAI.id] = [...aiRoster.slice(1), topFA];
@@ -979,7 +1280,7 @@ export default function App() {
               year,
               day: d + 1,
               category: 'WAIVER',
-              summary: `${randomAI.city} ${randomAI.name} claimed ${topFA.position} ${topFA.name} (${topFA.ovr} OVR) and waived ${weakest.name} (${weakest.ovr} OVR).`,
+              summary: `${randomAI.city} ${randomAI.name} claimed ${topFA.position} ${topFA.name} (${topFA.ovr} OVR · ${formatMoney(getPlayerSalary(topFA))}) and waived ${weakest.name}.`,
             });
           }
         }
@@ -992,10 +1293,16 @@ export default function App() {
         if (t1 && t2) {
           const r1 = rosterLookup[t1.id].sort((a, b) => b.ovr - a.ovr);
           const r2 = rosterLookup[t2.id].sort((a, b) => b.ovr - a.ovr);
-          const p1 = r1[Math.floor(Math.random() * 8) + 4];
-          const p2 = r2.find(
-            (p) => p.id !== p1?.id && p1 && Math.abs(getPlayerTradeValue(p) - getPlayerTradeValue(p1)) < 85
-          );
+          const p1 = r1[Math.floor(Math.random() * Math.min(8, r1.length)) + Math.min(4, Math.max(0, r1.length - 1))];
+          const p2 = r2.find((cand) => {
+            if (!p1 || cand.id === p1.id) return false;
+            if (Math.abs(getPlayerTradeValue(cand) - getPlayerTradeValue(p1)) >= 85) return false;
+            const s1 = getTeamPayrollSummary(t1, r1);
+            const s2 = getTeamPayrollSummary(t2, r2);
+            const post1 = roundMoney(s1.totalPayroll - getPlayerSalary(p1) + getPlayerSalary(cand));
+            const post2 = roundMoney(s2.totalPayroll - getPlayerSalary(cand) + getPlayerSalary(p1));
+            return post1 <= HARD_SALARY_CAP && post2 <= HARD_SALARY_CAP;
+          });
           if (p1 && p2) {
             p1.teamId = t2.id;
             p2.teamId = t1.id;
@@ -1006,7 +1313,7 @@ export default function App() {
               year,
               day: d + 1,
               category: 'TRADE',
-              summary: `TRADE: ${t1.id} acquires ${p2.position} ${p2.name} (${p2.ovr}) from ${t2.id} for ${p1.position} ${p1.name} (${p1.ovr}).`,
+              summary: `TRADE: ${t1.id} acquires ${p2.position} ${p2.name} (${p2.ovr} · ${formatMoney(getPlayerSalary(p2))}) from ${t2.id} for ${p1.position} ${p1.name} (${p1.ovr} · ${formatMoney(getPlayerSalary(p1))}).`,
             });
           }
         }
@@ -1107,21 +1414,29 @@ export default function App() {
       setLeagueRecords(nextRecords);
     }
 
-    // Checkpoints to minimize Firestore write units (>95% reduction)
+    // Keep saved cards synced with live local season stats
+    const updatedCards = savedCards.map((card) => {
+      const liveP = workingPlayers.find((p) => p.id === card.playerId);
+      return liveP
+        ? {
+            ...card,
+            teamId: liveP.teamId || 'FA',
+            seasonStats: liveP.seasonStats,
+            careerStats: liveP.careerStats,
+          }
+        : card;
+    });
+    if (updatedCards.length > 0) {
+      setSavedCards(updatedCards);
+    }
+
     const crossedSeasonEnd = targetDay >= 162;
-    const crossedMonth = Math.floor(targetDay / 30) > Math.floor(currentDay / 30) || crossedSeasonEnd;
-    const crossedBiWeekly =
-      Math.floor(targetDay / 14) > Math.floor(currentDay / 14) || numDays >= 14 || crossedSeasonEnd;
-    const crossedWeek =
-      Math.floor(targetDay / 7) > Math.floor(currentDay / 7) || numDays >= 7 || crossedMonth;
 
-    const shouldSyncCloud = Boolean(authUser && activeFranchiseId && !isCloudQuotaPaused());
-
-    // Always persist full state locally; sync to cloud at weekly/milestone checkpoints
+    // Always persist full state instantaneously to IndexedDB; only cloud-sync at Season End if mode === 'season'
     void persistToCloud({
-      skipCloud: !shouldSyncCloud || !crossedWeek,
-      includePlayers: crossedMonth,
-      includeScheduleAndDraft: false,
+      isSeasonMilestone: crossedSeasonEnd,
+      includePlayers: true,
+      includeScheduleAndDraft: true,
       phase: nextPhase,
       currentDay: targetDay,
       teams: workingTeams,
@@ -1130,37 +1445,10 @@ export default function App() {
       transactions: updatedTransactions,
       playoffResults: nextPlayoffs,
       championsHistory: nextChamps,
+      savedCards: updatedCards,
       seasonSnapshots: nextSnapshots,
       leagueRecords: nextRecords,
     });
-
-    if (shouldSyncCloud && activeFranchiseId) {
-      if (crossedBiWeekly) {
-        void recordSeasonSnapshot(snapPayload).catch((err) => handleCloudWriteError(err, true));
-      }
-      if ((crossedMonth || numDays >= 30) && recordUpdates.length > 0) {
-        void upsertLeagueRecords(activeFranchiseId, recordUpdates, leagueRecords).catch((err) =>
-          handleCloudWriteError(err, true)
-        );
-      }
-      if (crossedMonth) {
-        const matchingSaved = savedCards.filter((c) => workingPlayers.some((p) => p.id === c.playerId));
-        matchingSaved.forEach((card) => {
-          const liveP = workingPlayers.find((p) => p.id === card.playerId);
-          if (liveP) {
-            void upsertSavedPlayerCard(
-              {
-                ...card,
-                teamId: liveP.teamId || 'FA',
-                seasonStats: liveP.seasonStats,
-                careerStats: liveP.careerStats,
-              },
-              false
-            ).catch((err) => handleCloudWriteError(err, true));
-          }
-        });
-      }
-    }
   };
 
   const simulateDays = (numDays: number) => applyDaysSimulation(numDays);
@@ -1175,151 +1463,65 @@ export default function App() {
   };
 
   // ==========================================================================
-  // OFFSEASON PROGRESSION & ANNUAL ROOKIE DRAFT
+  // OFFSEASON PIPELINE: RETIREMENTS -> AGING -> RE-SIGN / FA -> ROOKIE DRAFT
   // ==========================================================================
 
-  const advanceToOffseasonRookieDraft = () => {
+  const advanceToOffseasonFreeAgency = () => {
     const nextYear = year + 1;
-    const updatedPlayers: Player[] = [];
-    let retiredCount = 0;
-
-    for (const p of players) {
-      const mergedCareer: Record<string, number> = {};
-      for (const k of Object.keys(p.careerStats)) {
-        mergedCareer[k] = (p.careerStats[k] || 0) + (p.seasonStats[k] || 0);
-      }
-
-      const nextAge = p.age + 1;
-      if (nextAge >= 36 && Math.random() < (nextAge - 34) * 0.22) {
-        retiredCount++;
-        continue;
-      }
-
-      let delta = 0;
-      if (nextAge <= 24) {
-        delta = Math.round(Math.random() * 4 + (p.potential > p.ovr ? 2 : 0));
-      } else if (nextAge <= 29) {
-        delta = Math.round((Math.random() - 0.35) * 3);
-      } else if (nextAge <= 33) {
-        delta = -Math.round(Math.random() * 3);
-      } else {
-        delta = -Math.round(Math.random() * 4 + 1);
-      }
-
-      const agedPlayer: Player = {
-        ...p,
-        age: nextAge,
-        careerStats: mergedCareer,
-        seasonStats: createEmptySeasonStats(p.isPitcher),
-      };
-
-      if (agedPlayer.isPitcher) {
-        agedPlayer.velocity = clamp((agedPlayer.velocity ?? 50) + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
-        agedPlayer.control = clamp((agedPlayer.control ?? 50) + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
-        agedPlayer.finesse = clamp((agedPlayer.finesse ?? 50) + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
-      } else {
-        agedPlayer.power = clamp((agedPlayer.power ?? 50) + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
-        agedPlayer.speed = clamp((agedPlayer.speed ?? 50) + (nextAge > 29 ? delta - 1 : delta), 20, 99);
-        agedPlayer.glove = clamp((agedPlayer.glove ?? 50) + delta + Math.round((Math.random() - 0.5) * 2), 20, 99);
-      }
-      agedPlayer.ovr = calculateOverall(agedPlayer);
-      updatedPlayers.push(agedPlayer);
-    }
-
-    const reverseStandings = [...teams].sort((a, b) => {
-      if (a.wins !== b.wins) return a.wins - b.wins;
-      return a.runsScored - a.runsAllowed - (b.runsScored - b.runsAllowed);
+    const rollover = runOffseasonRollover({
+      nextYear,
+      teams,
+      players,
+      draftPicks,
+      userTeamId,
     });
 
-    const slotByOrigTeam: Record<string, number> = {};
-    reverseStandings.forEach((t, idx) => {
-      slotByOrigTeam[t.id] = idx + 1;
-    });
-
-    const yearPicks = draftPicks.filter((pk) => pk.year === nextYear);
-    const orderedRookiePicks: DraftSlot[] = [];
-    for (let r = 1; r <= 5; r++) {
-      const roundPicks = yearPicks
-        .filter((pk) => pk.round === r)
-        .sort((a, b) => (slotByOrigTeam[a.originalTeamId] || 16) - (slotByOrigTeam[b.originalTeamId] || 16));
-
-      roundPicks.forEach((pk, idx) => {
-        orderedRookiePicks.push({
-          pickNum: (r - 1) * 32 + idx + 1,
-          round: r,
-          teamId: pk.ownerTeamId,
-          originalTeamId: pk.originalTeamId,
-          pickId: pk.id,
-        });
-      });
-    }
-
-    const rookieClass = generateRookieClass(nextYear);
-    const resetTeams = teams.map((t) => ({
-      ...t,
-      wins: 0,
-      losses: 0,
-      runsScored: 0,
-      runsAllowed: 0,
-      streak: 0,
-      last10: [],
-    }));
-
-    const newFutureYear = nextYear + 3;
-    const addedFuturePicks: DraftPick[] = [];
-    for (let r = 1; r <= 5; r++) {
-      for (const t of resetTeams) {
-        addedFuturePicks.push({
-          id: `PICK-${newFutureYear}-R${r}-${t.id}`,
-          year: newFutureYear,
-          round: r,
-          originalTeamId: t.id,
-          ownerTeamId: t.id,
-        });
-      }
-    }
-
-    const nextSchedule = generateSeasonSchedule(resetTeams);
-    const nextDraftPicks = [...draftPicks.filter((pk) => pk.year > nextYear), ...addedFuturePicks];
     const txEntry: TransactionEntry = {
       id: `offseason-${nextYear}-${Date.now()}`,
       year: nextYear,
       day: 0,
       category: 'OFFSEASON',
-      summary: `Offseason ${nextYear}: ${retiredCount} veterans retired. Reverse-standings 5-round Rookie Draft underway (#1 pick: ${orderedRookiePicks[0]?.teamId}).`,
+      summary: `Offseason ${nextYear}: ${rollover.retirements.length} retired, ${rollover.expiringUserCount} user contracts expired, ${rollover.aiReSignedCount} AI core re-signings completed.`,
     };
     const nextTx = [txEntry, ...transactions.slice(0, 148)];
 
     setYear(nextYear);
-    setTeams(resetTeams);
-    setPlayers(updatedPlayers);
-    setDraftPicks(nextDraftPicks);
-    setSchedule(nextSchedule);
+    setTeams(rollover.teams);
+    setPlayers(rollover.players);
+    setDraftPicks(rollover.draftPicks);
+    setSchedule(rollover.schedule);
     setCurrentDay(0);
     setPlayoffResults(null);
     setRecentGames([]);
-    setDraftOrder(orderedRookiePicks);
+    setDraftOrder(rollover.orderedRookiePicks);
     setCurrentPickIdx(0);
-    setDraftPool(rookieClass);
+    setDraftPool([]);
     setDraftHistory([]);
     setTransactions(nextTx);
-    setPhase('ROOKIE_DRAFT');
-    setActiveTab('draft');
-    showToast(`Welcome to the ${nextYear} Offseason & Rookie Draft.`, 'info');
+    setPhase('OFFSEASON_FA');
+    setActiveTab('offseason');
+    setRetirementsSummary({
+      year: nextYear,
+      retirements: rollover.retirements,
+      expiringUserCount: rollover.expiringUserCount,
+      aiReSignedCount: rollover.aiReSignedCount,
+    });
+    showToast(`${nextYear} Offseason & Free Agency underway.`, 'info');
 
     void persistToCloud({
+      isSeasonMilestone: true,
       year: nextYear,
-      phase: 'ROOKIE_DRAFT',
+      phase: 'OFFSEASON_FA',
       includePlayers: true,
       includeScheduleAndDraft: true,
       currentDay: 0,
       currentPickIdx: 0,
-      teams: resetTeams,
-      players: updatedPlayers,
-      draftPool: rookieClass,
-      schedule: nextSchedule,
-      draftPicks: nextDraftPicks,
-      draftOrder: orderedRookiePicks,
+      teams: rollover.teams,
+      players: rollover.players,
+      draftPool: [],
+      schedule: rollover.schedule,
+      draftPicks: rollover.draftPicks,
+      draftOrder: rollover.orderedRookiePicks,
       draftHistory: [],
       playoffResults: null,
       recentGames: [],
@@ -1327,9 +1529,141 @@ export default function App() {
     });
   };
 
+  const proceedFromOffseasonFAToDraft = () => {
+    const aiFA = runAIOffseasonFreeAgency({
+      teams,
+      players,
+      userTeamId,
+      draftOrder,
+    });
+    const rookieClass = generateRookieClass(year);
+    const faLogs: TransactionEntry[] = aiFA.signings.slice(0, 8).map((s, idx) => ({
+      id: `fa-ai-${year}-${Date.now()}-${idx}`,
+      year,
+      day: 0,
+      category: 'SIGNING',
+      summary: s,
+    }));
+    const draftNotice: TransactionEntry = {
+      id: `rdraft-start-${year}-${Date.now()}`,
+      year,
+      day: 0,
+      category: 'DRAFT',
+      summary: `${year} 5-Round Rookie Draft initialized (#1 pick: ${draftOrder[0]?.teamId || 'TBD'}). Rookie slots: $3.50M R1, $1.75M R2, $0.75M R3–R5 (3 yrs).`,
+    };
+    const nextTx = [draftNotice, ...faLogs, ...transactions].slice(0, 150);
+
+    setPlayers(aiFA.players);
+    setDraftPool(rookieClass);
+    setCurrentPickIdx(0);
+    setDraftHistory([]);
+    setTransactions(nextTx);
+    setPhase('ROOKIE_DRAFT');
+    setActiveTab('draft');
+    showToast(`${year} Rookie Draft is on the clock.`, 'success');
+
+    void persistToCloud({
+      phase: 'ROOKIE_DRAFT',
+      includePlayers: true,
+      includeScheduleAndDraft: true,
+      currentPickIdx: 0,
+      players: aiFA.players,
+      draftPool: rookieClass,
+      draftHistory: [],
+      transactions: nextTx,
+    });
+  };
+
   // ==========================================================================
-  // WAIVER WIRE, TRADES & ROSTER CUTS
+  // FREE AGENCY, WAIVERS, EXTENSIONS, RELEASES & TRADES (STRICT $180M CAP)
   // ==========================================================================
+
+  const handleSignOffseasonFA = (playerId: string, contractYears: number) => {
+    const userRoster = playersByTeam.byTeam[userTeamId] || [];
+    if (userRoster.length >= 30) {
+      showToast('Roster is full (30/30). Release a player first.', 'error');
+      return;
+    }
+    const target = players.find((p) => p.id === playerId && !p.teamId);
+    if (!target) return;
+
+    const offer = calculateExtensionOffer(target, contractYears);
+    const postPayroll = roundMoney(userCapSummary.totalPayroll + offer.salary);
+    if (postPayroll > HARD_SALARY_CAP) {
+      showToast(
+        `Signing blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        'error'
+      );
+      return;
+    }
+
+    const wasExpiring = target.previousTeamId === userTeamId;
+    const nextPlayers = players.map((p) =>
+      p.id === playerId
+        ? {
+            ...p,
+            teamId: userTeamId,
+            previousTeamId: userTeamId,
+            salary: offer.salary,
+            contractYears: offer.years,
+          }
+        : p
+    );
+
+    const msg = `${userTeamId} ${wasExpiring ? 're-signed' : 'signed FA'} ${target.position} ${target.name} (${target.ovr} OVR) to a ${offer.years}-yr, ${formatMoney(offer.salary)}/yr deal.`;
+    const nextTx = [
+      { id: `fa-${Date.now()}`, year, day: currentDay, category: 'SIGNING', summary: msg },
+      ...transactions.slice(0, 148),
+    ];
+
+    setPlayers(nextPlayers);
+    setTransactions(nextTx);
+    showToast(msg, 'success');
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
+  };
+
+  const handleExtendPlayer = (playerId: string, contractYears: number) => {
+    const target = players.find((p) => p.id === playerId && p.teamId === userTeamId);
+    if (!target) return;
+
+    const offer = calculateExtensionOffer(target, contractYears);
+    const postPayroll = roundMoney(
+      userCapSummary.totalPayroll - getPlayerSalary(target) + offer.salary
+    );
+    if (postPayroll > HARD_SALARY_CAP) {
+      showToast(
+        `Extension blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        'error'
+      );
+      return;
+    }
+
+    const nextPlayers = players.map((p) =>
+      p.id === playerId
+        ? { ...p, salary: offer.salary, contractYears: offer.years }
+        : p
+    );
+    const msg = `${userTeamId} extended ${target.position} ${target.name} (${offer.years} yrs · ${formatMoney(offer.salary)}/yr).`;
+    const nextTx = [
+      { id: `ext-${Date.now()}`, year, day: currentDay, category: 'CONTRACT', summary: msg },
+      ...transactions.slice(0, 148),
+    ];
+
+    setPlayers(nextPlayers);
+    setTransactions(nextTx);
+    showToast(msg, 'success');
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
+  };
 
   const handleWaiverClaimAndDrop = (claimPlayerId: string, dropPlayerId: string | null) => {
     const userRoster = playersByTeam.byTeam[userTeamId] || [];
@@ -1345,26 +1679,50 @@ export default function App() {
       ? players.find((p) => p.id === dropPlayerId && p.teamId === userTeamId)
       : null;
 
+    const claimSal = getPlayerSalary(claimPlr);
+    const dropSal = dropPlr ? getPlayerSalary(dropPlr) : 0;
+    const deadHit = dropPlr ? computeReleaseDeadCap(dropPlr) : 0;
+    const postPayroll = roundMoney(userCapSummary.totalPayroll + claimSal - dropSal + deadHit);
+
+    if (postPayroll > HARD_SALARY_CAP) {
+      showToast(
+        `Waiver claim blocked: post-claim payroll (${formatMoney(postPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        'error'
+      );
+      return;
+    }
+
+    const nextTeams =
+      deadHit > 0
+        ? teams.map((t) =>
+            t.id === userTeamId
+              ? { ...t, deadCap: roundMoney((t.deadCap || 0) + deadHit) }
+              : t
+          )
+        : teams;
+
     const nextPlayers = players.map((p) => {
-      if (p.id === claimPlayerId) return { ...p, teamId: userTeamId };
+      if (p.id === claimPlayerId) return { ...p, teamId: userTeamId, previousTeamId: userTeamId };
       if (dropPlr && p.id === dropPlr.id) return { ...p, teamId: null };
       return p;
     });
 
     const msg = dropPlr
-      ? `${userTeamId} claimed ${claimPlr.position} ${claimPlr.name} (${claimPlr.ovr}) from waivers and released ${dropPlr.name} (${dropPlr.ovr}).`
-      : `${userTeamId} signed ${claimPlr.position} ${claimPlr.name} (${claimPlr.ovr}) from waivers.`;
+      ? `${userTeamId} claimed ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}) and waived ${dropPlr.name}${deadHit > 0 ? ` (+${formatMoney(deadHit)} dead cap)` : ''}.`
+      : `${userTeamId} signed ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}) from waivers.`;
     const nextTx = [
       { id: `wv-${Date.now()}`, year, day: currentDay, category: 'WAIVER', summary: msg },
       ...transactions.slice(0, 148),
     ];
 
+    setTeams(nextTeams);
     setPlayers(nextPlayers);
     setTransactions(nextTx);
     showToast(msg, 'success');
     void persistToCloud({
       includePlayers: true,
       includeScheduleAndDraft: false,
+      teams: nextTeams,
       players: nextPlayers,
       transactions: nextTx,
     });
@@ -1374,19 +1732,38 @@ export default function App() {
     const dropPlr = players.find((p) => p.id === dropPlayerId && p.teamId === userTeamId);
     if (!dropPlr) return;
 
+    const deadHit = computeReleaseDeadCap(dropPlr);
+    const nextTeams =
+      deadHit > 0
+        ? teams.map((t) =>
+            t.id === userTeamId
+              ? { ...t, deadCap: roundMoney((t.deadCap || 0) + deadHit) }
+              : t
+          )
+        : teams;
+
     const nextPlayers = players.map((p) => (p.id === dropPlayerId ? { ...p, teamId: null } : p));
-    const msg = `${userTeamId} released ${dropPlr.position} ${dropPlr.name} (${dropPlr.ovr}) to the Waiver Pool.`;
+    const msg = `${userTeamId} released ${dropPlr.position} ${dropPlr.name} (${dropPlr.ovr}) to the Waiver Pool${
+      deadHit > 0 ? ` — ${formatMoney(deadHit)} added to Dead Cap` : ''
+    }.`;
     const nextTx = [
       { id: `rel-${Date.now()}`, year, day: currentDay, category: 'WAIVER', summary: msg },
       ...transactions.slice(0, 148),
     ];
 
+    setTeams(nextTeams);
     setPlayers(nextPlayers);
     setTransactions(nextTx);
-    showToast(`Released ${dropPlr.name} to waivers.`, 'info');
+    showToast(
+      deadHit > 0
+        ? `Released ${dropPlr.name} (+${formatMoney(deadHit)} Dead Cap).`
+        : `Released ${dropPlr.name} to waivers.`,
+      'info'
+    );
     void persistToCloud({
       includePlayers: true,
       includeScheduleAndDraft: false,
+      teams: nextTeams,
       players: nextPlayers,
       transactions: nextTx,
     });
@@ -1396,6 +1773,13 @@ export default function App() {
     const userRoster = playersByTeam.byTeam[userTeamId] || [];
     if (userRoster.length > 30) {
       showToast(`Release ${userRoster.length - 30} more player(s) to reach the 30-man limit.`, 'error');
+      return;
+    }
+    if (userCapSummary.overCap) {
+      showToast(
+        `Payroll (${formatMoney(userCapSummary.totalPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap. Release salary first.`,
+        'error'
+      );
       return;
     }
     setPhase('REGULAR_SEASON');
@@ -1418,20 +1802,32 @@ export default function App() {
     const userRoster = playersByTeam.byTeam[userTeamId] || [];
     const aiRoster = playersByTeam.byTeam[partnerTeamId] || [];
 
-    const newUserCount = userRoster.length - userPlayerIds.length + aiPlayerIds.length;
-    const newAiCount = aiRoster.length - aiPlayerIds.length + userPlayerIds.length;
+    const userSendPlayers = userRoster.filter((p) => userPlayerIds.includes(p.id));
+    const userSendPicks = draftPicks.filter((pk) => userPickIds.includes(pk.id));
+    const aiSendPlayers = aiRoster.filter((p) => aiPlayerIds.includes(p.id));
+    const aiSendPicks = draftPicks.filter((pk) => aiPickIds.includes(pk.id));
 
-    if (newUserCount > 30 || newAiCount > 30) {
-      showToast(
-        `Trade violates 30-man roster limit (Resulting sizes: You ${newUserCount}, ${partnerTeamId} ${newAiCount}).`,
-        'error'
-      );
+    const evalRes = evaluateTradeProposal({
+      userTeam,
+      partnerTeam: teamMap[partnerTeamId],
+      userRoster,
+      partnerRoster: aiRoster,
+      userSendPlayers,
+      userSendPicks,
+      aiSendPlayers,
+      aiSendPicks,
+      teams,
+      year,
+    });
+
+    if (evalRes.capBlocked || evalRes.rosterBlocked) {
+      showToast(evalRes.capBlockReason || 'Trade violates cap or 30-man roster limit.', 'error');
       return false;
     }
 
     const nextPlayers = players.map((p) => {
-      if (userPlayerIds.includes(p.id)) return { ...p, teamId: partnerTeamId };
-      if (aiPlayerIds.includes(p.id)) return { ...p, teamId: userTeamId };
+      if (userPlayerIds.includes(p.id)) return { ...p, teamId: partnerTeamId, previousTeamId: partnerTeamId };
+      if (aiPlayerIds.includes(p.id)) return { ...p, teamId: userTeamId, previousTeamId: userTeamId };
       return p;
     });
 
@@ -1514,16 +1910,8 @@ export default function App() {
 
     const nextCards = [{ ...cardData }, ...savedCards.filter((c) => c.id !== cardId)];
     setSavedCards(nextCards);
-    void persistToCloud({ skipCloud: true, savedCards: nextCards });
-
-    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
-      try {
-        await upsertSavedPlayerCard(cardData, !existing);
-      } catch (err) {
-        handleCloudWriteError(err);
-      }
-    }
-    showToast(`Saved ${player.name} to Player Card Vault.`, 'success');
+    void persistToCloud({ savedCards: nextCards });
+    showToast(`Saved ${player.name} to On-Device Card Vault.`, 'success');
   };
 
   const handleCreateCustomCard = async (params: {
@@ -1555,6 +1943,20 @@ export default function App() {
       finesse: params.finesse,
     });
 
+    const customSalary = calculateFairSalary(ovr, params.age, params.potential);
+    if (
+      params.targetDestination === 'ROSTER' &&
+      roundMoney(userCapSummary.totalPayroll + customSalary) > HARD_SALARY_CAP
+    ) {
+      showToast(
+        `Cannot add custom player to active roster: ${formatMoney(
+          roundMoney(userCapSummary.totalPayroll + customSalary)
+        )} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        'error'
+      );
+      return;
+    }
+
     const newPlayerId = `PLR-CUST-${Date.now()}`;
     const cardId = `CARD-${Date.now()}`;
     const assignedTeamId = params.targetDestination === 'ROSTER' ? userTeamId : null;
@@ -1568,8 +1970,11 @@ export default function App() {
       isPitcher,
       position: params.position,
       teamId: assignedTeamId,
+      previousTeamId: assignedTeamId,
       ovr,
       potential: params.potential,
+      salary: customSalary,
+      contractYears: 3,
       ...(isPitcher
         ? { velocity: params.velocity, control: params.control, finesse: params.finesse }
         : { power: params.power, speed: params.speed, glove: params.glove }),
@@ -1621,61 +2026,24 @@ export default function App() {
 
     const nextCards = [{ ...cardPayload }, ...savedCards];
     setSavedCards(nextCards);
-
-    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
-      try {
-        await upsertSavedPlayerCard(cardPayload, true);
-        if (params.targetDestination !== 'VAULT_ONLY') {
-          await persistToCloud({
-            includePlayers: true,
-            includeScheduleAndDraft: false,
-            players: nextPlayers,
-            transactions: nextTx,
-            savedCards: nextCards,
-          });
-        } else {
-          void persistToCloud({ skipCloud: true, savedCards: nextCards });
-        }
-      } catch (err) {
-        handleCloudWriteError(err);
-      }
-    } else {
-      void persistToCloud({
-        skipCloud: true,
-        players: nextPlayers,
-        transactions: nextTx,
-        savedCards: nextCards,
-      });
-    }
+    void persistToCloud({
+      players: nextPlayers,
+      transactions: nextTx,
+      savedCards: nextCards,
+    });
     showToast(`Created ${params.name} (${ovr} OVR) player card.`, 'success');
   };
 
   const handleUpdateCardTheme = async (card: SavedPlayerCard, theme: CardTheme) => {
     const nextCards = savedCards.map((c) => (c.id === card.id ? { ...c, cardTheme: theme } : c));
     setSavedCards(nextCards);
-    void persistToCloud({ skipCloud: true, savedCards: nextCards });
-
-    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
-      try {
-        await upsertSavedPlayerCard({ ...card, cardTheme: theme }, false);
-      } catch (err) {
-        handleCloudWriteError(err);
-      }
-    }
+    void persistToCloud({ savedCards: nextCards });
   };
 
   const handleDeleteCard = async (cardId: string) => {
     const nextCards = savedCards.filter((c) => c.id !== cardId);
     setSavedCards(nextCards);
-    void persistToCloud({ skipCloud: true, savedCards: nextCards });
-
-    if (authUser && activeFranchiseId && !isCloudQuotaPaused()) {
-      try {
-        await deleteSavedPlayerCard(activeFranchiseId, cardId);
-      } catch (err) {
-        handleCloudWriteError(err);
-      }
-    }
+    void persistToCloud({ savedCards: nextCards });
     showToast('Removed player card from vault.', 'info');
   };
 
@@ -1687,35 +2055,57 @@ export default function App() {
     const selectedCfg = TEAM_CONFIGS.find((t) => t.id === userTeamId);
     return (
       <div className="min-h-screen bg-[#090D16] text-slate-100 p-4 sm:p-8">
+        <input
+          ref={importFileRef}
+          type="file"
+          accept=".json,application/json"
+          onChange={handleImportSaveFile}
+          className="hidden"
+        />
         <div className="max-w-7xl mx-auto space-y-8">
           {/* Top Bar */}
           <header className="flex flex-wrap items-center justify-between gap-6 border-b border-slate-800 pb-6">
             <div className="space-y-1.5">
               <div className="text-xs font-mono text-sky-400">
-                32-Team Baseball Front Office & Analytics Platform
+                32-Team Baseball Front Office · On-Device IndexedDB + Optional Cloud Backup
               </div>
               <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-white">
                 Diamond Dynasty GM
               </h1>
               <p className="text-slate-400 max-w-2xl text-sm">
-                Draft from a 1,344-player universe, build dynamic player cards, track real-time division & league records, and analyze multi-season performance trends backed by Firebase.
+                Draft from a 1,344-player universe, manage a strict $180M salary cap, and sim full multi-season dynasties locally on your device with zero cloud quota burn.
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={() => importFileRef.current?.click()}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition cursor-pointer whitespace-nowrap"
+              >
+                <Upload className="w-3.5 h-3.5 text-emerald-400" />
+                Import Save (.json)
+              </button>
+              <button
+                onClick={handleToggleSyncMode}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-medium text-slate-300 transition cursor-pointer whitespace-nowrap"
+                title="Control when compressed backups are sent to Firestore"
+              >
+                <Cloud className="w-3.5 h-3.5 text-sky-400" />
+                Cloud Mode: {cloudSyncMode === 'manual' ? 'Manual (0 Auto Writes)' : 'Season Checkpoints'}
+              </button>
               {authReady && !authUser && (
                 <button
                   onClick={handleSignIn}
                   className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-white transition cursor-pointer whitespace-nowrap"
                 >
                   <LogIn className="w-4 h-4 text-sky-400" />
-                  Sign In with Google to Save & Sync
+                  Sign In for Cloud Backup
                 </button>
               )}
               {authUser && (
                 <div className="flex items-center gap-3 px-3.5 py-2 rounded-lg bg-slate-900 border border-slate-800 text-xs">
                   <Cloud className="w-4 h-4 text-emerald-400 shrink-0" />
-                  <span className="text-slate-300 truncate max-w-[180px]">{authUser.email}</span>
+                  <span className="text-slate-300 truncate max-w-[160px]">{authUser.email}</span>
                   <button
                     onClick={handleSignOut}
                     className="text-slate-400 hover:text-white cursor-pointer"
@@ -1741,10 +2131,10 @@ export default function App() {
                 <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-xs sm:text-sm text-amber-100 space-y-1">
                   <div className="font-semibold">
-                    Daily Firestore Free Write Quota Reached — Local Auto-Save Active
+                    Daily Firestore Write Quota Paused — Playing Seamlessly On-Device
                   </div>
                   <p className="text-amber-200/80 text-xs">
-                    Your free daily database write units reset tomorrow. You can keep playing seamlessly via local browser saves, or upgrade your Spark plan database under the Enterprise Edition section.
+                    All gameplay now auto-saves to your device&apos;s IndexedDB (0 Firebase writes). Manual Cloud Backup resumes automatically after tomorrow&apos;s quota reset, or export a `.ddgm.json` file anytime.
                   </p>
                 </div>
               </div>
@@ -1769,14 +2159,84 @@ export default function App() {
             </div>
           )}
 
-          {/* Saved Firebase Dynasties */}
+          {/* On-Device IndexedDB Dynasties (Primary Free Storage) */}
+          {localBackups.length > 0 && (
+            <section className="space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-display text-lg font-bold text-white flex items-center gap-2">
+                  <HardDrive className="w-4 h-4 text-emerald-400" />
+                  On-Device Dynasties ({localBackups.length})
+                </h2>
+                <span className="text-xs text-slate-400">
+                  Stored locally in IndexedDB · Instant, offline-ready, $0 server cost
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {localBackups.map((lb) => {
+                  const cfg = TEAM_CONFIGS.find((t) => t.id === lb.userTeamId);
+                  const hasCloud = cloudFranchises.some((cf) => cf.id === lb.franchiseId);
+                  const needsBackup = !lb.lastCloudSyncMs || lb.savedAtMs > lb.lastCloudSyncMs;
+                  return (
+                    <div
+                      key={lb.franchiseId}
+                      className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between gap-4"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <TeamBadge team={cfg} size="lg" />
+                          <div className="min-w-0">
+                            <div className="font-bold text-white text-sm truncate">{lb.name}</div>
+                            <div className="text-xs text-slate-400 font-mono mt-0.5 tabular-nums">
+                              {lb.year} · Day {lb.currentDay}/162 · {lb.wins}-{lb.losses}
+                            </div>
+                            <div className="text-[11px] text-slate-500 mt-0.5">
+                              {hasCloud
+                                ? needsBackup
+                                  ? 'Local ahead of Cloud Backup'
+                                  : 'Backed up to Cloud'
+                                : 'Device-only save'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => void handleExportLocalFranchiseById(lb.franchiseId)}
+                            title="Export .ddgm.json Save File"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-sky-500/10 cursor-pointer"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => void handleDeleteLocalBackup(lb.franchiseId)}
+                            aria-label={`Delete local ${lb.name}`}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => void resumeLocalBackup(lb.franchiseId)}
+                        className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition cursor-pointer"
+                      >
+                        Resume Dynasty
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Saved Cloud Backups (Firestore) */}
           {authUser && cloudFranchises.length > 0 && (
             <section className="space-y-3">
               <div className="flex items-center justify-between">
-                <h2 className="font-display text-lg font-bold text-white">
-                  Saved Cloud Dynasties ({cloudFranchises.length})
+                <h2 className="font-display text-lg font-bold text-white flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-sky-400" />
+                  Cloud Backups ({cloudFranchises.length})
                 </h2>
-                <span className="text-xs text-slate-400">Synced via Firestore</span>
+                <span className="text-xs text-slate-400">Cross-device compressed Firestore backups</span>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {cloudFranchises.map((fran) => {
@@ -1792,7 +2252,7 @@ export default function App() {
                           <TeamBadge team={cfg} size="lg" />
                           <div className="min-w-0">
                             <div className="font-bold text-white text-sm truncate">{fran.name}</div>
-                            <div className="text-xs text-slate-400 font-mono mt-0.5">
+                            <div className="text-xs text-slate-400 font-mono mt-0.5 tabular-nums">
                               {fran.year} · Day {fran.currentDay}/162 · {teamState ? `${teamState.wins}-${teamState.losses}` : '0-0'}
                             </div>
                           </div>
@@ -1810,62 +2270,11 @@ export default function App() {
                         onClick={() => void resumeCloudFranchise(fran)}
                         className="w-full py-2 rounded-lg bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs transition cursor-pointer"
                       >
-                        {loadingFranchiseId === fran.id ? 'Loading Roster & Schedule...' : 'Resume Dynasty'}
+                        {loadingFranchiseId === fran.id ? 'Decompressing Save...' : 'Restore from Cloud'}
                       </button>
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          )}
-
-          {/* Local Auto-Saved Dynasties */}
-          {localBackups.filter((lb) => !cloudFranchises.some((cf) => cf.id === lb.franchiseId)).length > 0 && (
-            <section className="space-y-3">
-              <div className="flex items-center justify-between">
-                <h2 className="font-display text-lg font-bold text-white flex items-center gap-2">
-                  <HardDrive className="w-4 h-4 text-emerald-400" />
-                  Local Auto-Saved Dynasties
-                </h2>
-                <span className="text-xs text-slate-400">Stored in this browser</span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {localBackups
-                  .filter((lb) => !cloudFranchises.some((cf) => cf.id === lb.franchiseId))
-                  .map((lb) => {
-                    const cfg = TEAM_CONFIGS.find((t) => t.id === lb.userTeamId);
-                    return (
-                      <div
-                        key={lb.franchiseId}
-                        className="bg-slate-900 border border-slate-800 rounded-xl p-4 flex flex-col justify-between gap-4"
-                      >
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <TeamBadge team={cfg} size="lg" />
-                            <div className="min-w-0">
-                              <div className="font-bold text-white text-sm truncate">{lb.name}</div>
-                              <div className="text-xs text-slate-400 font-mono mt-0.5">
-                                {lb.year} · Day {lb.currentDay}/162 · {lb.wins}-{lb.losses}
-                              </div>
-                            </div>
-                          </div>
-                          <button
-                            onClick={() => handleDeleteLocalBackup(lb.franchiseId)}
-                            aria-label={`Delete local ${lb.name}`}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 cursor-pointer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => resumeLocalBackup(lb.franchiseId)}
-                          className="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition cursor-pointer"
-                        >
-                          Resume Local Auto-Save
-                        </button>
-                      </div>
-                    );
-                  })}
               </div>
             </section>
           )}
@@ -1927,8 +2336,12 @@ export default function App() {
   const userRoster = playersByTeam.byTeam[userTeamId] || [];
   const waiverPool = playersByTeam.waivers || [];
   const isDraftPhase = phase === 'INAUGURAL_DRAFT' || phase === 'ROOKIE_DRAFT';
+  const isOffseasonFA = phase === 'OFFSEASON_FA';
 
   const navItems = [
+    ...(isOffseasonFA
+      ? [{ id: 'offseason', label: 'Offseason FA & Cap', icon: Sparkles, disabled: false }]
+      : []),
     { id: 'dashboard', label: 'Dashboard', icon: Activity, disabled: isDraftPhase },
     {
       id: 'live',
@@ -1940,7 +2353,7 @@ export default function App() {
     { id: 'cards', label: `Player Cards (${savedCards.length})`, icon: IdCard, disabled: false },
     { id: 'roster', label: `Roster (${userRoster.length}/30)`, icon: Users, disabled: false },
     { id: 'standings', label: 'Standings & Records', icon: BarChart3, disabled: isDraftPhase },
-    { id: 'waivers', label: `Waivers (${waiverPool.length})`, icon: UserPlus, disabled: isDraftPhase },
+    { id: 'waivers', label: `Waivers (${waiverPool.length})`, icon: UserPlus, disabled: isDraftPhase || isOffseasonFA },
     { id: 'trades', label: 'Trade Center', icon: ArrowLeftRight, disabled: isDraftPhase },
     { id: 'draft', label: isDraftPhase ? 'Draft Room' : 'Draft Capital', icon: ListOrdered, disabled: false },
     { id: 'log', label: 'Wire', icon: FileText, disabled: false },
@@ -1966,7 +2379,7 @@ export default function App() {
                   {userTeam?.league} {userTeam?.division}
                 </span>
               </div>
-              <div className="text-xs text-slate-400 flex items-center gap-2 font-mono">
+              <div className="text-xs text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono tabular-nums">
                 <span className="text-sky-400 font-semibold">{year}</span>
                 <span aria-hidden="true">·</span>
                 <span className="text-white font-semibold">
@@ -1975,10 +2388,41 @@ export default function App() {
                 <span aria-hidden="true">·</span>
                 <span>
                   {phase === 'INAUGURAL_DRAFT' && 'Inaugural Draft'}
+                  {phase === 'OFFSEASON_FA' && 'Offseason FA'}
                   {phase === 'ROOKIE_DRAFT' && 'Rookie Draft'}
                   {phase === 'ROSTER_CUTS' && 'Roster Cuts'}
                   {phase === 'REGULAR_SEASON' && `Day ${currentDay}/162`}
                   {phase === 'PLAYOFFS_COMPLETE' && 'Playoffs Complete'}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  Payroll{' '}
+                  <strong
+                    className={
+                      userCapSummary.overCap
+                        ? 'text-rose-400'
+                        : userCapSummary.underFloor
+                        ? 'text-amber-300'
+                        : 'text-white'
+                    }
+                  >
+                    {formatMoney(userCapSummary.totalPayroll)}
+                  </strong>
+                  <span className="text-slate-500">/$180M</span>
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  Cap Space{' '}
+                  <strong className={userCapSummary.capSpace < 5 ? 'text-amber-300' : 'text-emerald-400'}>
+                    {formatMoney(userCapSummary.capSpace)}
+                  </strong>
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  Dead Cap{' '}
+                  <strong className={userCapSummary.deadCap > 0 ? 'text-rose-300' : 'text-slate-300'}>
+                    {formatMoney(userCapSummary.deadCap)}
+                  </strong>
                 </span>
               </div>
             </div>
@@ -2017,10 +2461,19 @@ export default function App() {
 
             {phase === 'PLAYOFFS_COMPLETE' && (
               <button
-                onClick={advanceToOffseasonRookieDraft}
+                onClick={advanceToOffseasonFreeAgency}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition cursor-pointer whitespace-nowrap"
               >
-                <Sparkles className="w-4 h-4" /> Advance to {year + 1} Draft
+                <Sparkles className="w-4 h-4" /> Start {year + 1} Offseason
+              </button>
+            )}
+
+            {phase === 'OFFSEASON_FA' && (
+              <button
+                onClick={proceedFromOffseasonFAToDraft}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold transition cursor-pointer whitespace-nowrap"
+              >
+                <Sparkles className="w-4 h-4" /> Start {year} Rookie Draft
               </button>
             )}
 
@@ -2033,36 +2486,54 @@ export default function App() {
               </button>
             )}
 
+            <button
+              onClick={handleExportCurrentFranchise}
+              title="Export Dynasty Save (.ddgm.json)"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium transition cursor-pointer whitespace-nowrap"
+            >
+              <Download className="w-3.5 h-3.5 text-emerald-400" />
+              Export
+            </button>
+
             {authUser ? (
-              <button
-                onClick={() =>
-                  syncState === 'quota'
-                    ? void handleRetryCloudSync()
-                    : void persistToCloud({ includePlayers: true, includeScheduleAndDraft: isDraftPhase })
-                }
-                disabled={syncState === 'saving'}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
-                  syncState === 'quota'
-                    ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
-                    : 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-200'
-                }`}
-                title="Save Franchise State"
-              >
-                <Save className="w-3.5 h-3.5 text-sky-400" />
-                {syncState === 'saving'
-                  ? 'Saving...'
-                  : syncState === 'quota'
-                  ? 'Local Save (Retry Sync)'
-                  : syncState === 'synced'
-                  ? 'Synced'
-                  : 'Save'}
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => void handleBackupToCloud()}
+                  disabled={syncState === 'saving'}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+                    syncState === 'quota'
+                      ? 'bg-amber-500/15 hover:bg-amber-500/25 border-amber-500/40 text-amber-300'
+                      : hasUnsyncedCloudChanges
+                      ? 'bg-sky-500/15 hover:bg-sky-500/25 border-sky-500/40 text-sky-200'
+                      : 'bg-slate-800/80 hover:bg-slate-800 border-slate-700 text-slate-200'
+                  }`}
+                  title="Send single compressed gzip backup to Firestore (~50KB)"
+                >
+                  <Save className="w-3.5 h-3.5 text-sky-400" />
+                  {syncState === 'saving'
+                    ? 'Backing Up...'
+                    : syncState === 'quota'
+                    ? 'On-Device Saved (Retry Cloud)'
+                    : hasUnsyncedCloudChanges
+                    ? 'Backup to Cloud'
+                    : 'Cloud Backed Up'}
+                </button>
+                <button
+                  onClick={handleToggleSyncMode}
+                  title="Toggle Manual (0 auto writes) vs Season Checkpoints"
+                  className="px-2 py-1.5 rounded-lg bg-slate-800/60 hover:bg-slate-800 border border-slate-700/80 text-[11px] font-mono text-slate-400 hover:text-white cursor-pointer whitespace-nowrap"
+                >
+                  {cloudSyncMode === 'manual' ? 'Manual' : 'Season'}
+                </button>
+              </div>
             ) : (
               <button
                 onClick={handleSignIn}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-xs font-semibold text-sky-300 transition cursor-pointer whitespace-nowrap"
+                title="Progress auto-saves on this device. Sign in for optional compressed Cloud Backup."
               >
-                <LogIn className="w-3.5 h-3.5" /> Sign In to Sync
+                <HardDrive className="w-3.5 h-3.5 text-emerald-400" />
+                On-Device Saved · Cloud Backup
               </button>
             )}
 
@@ -2168,6 +2639,22 @@ export default function App() {
 
       {/* Main Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+        {activeTab === 'offseason' && isOffseasonFA && (
+          <OffseasonFreeAgencyView
+            year={year}
+            userTeam={userTeam}
+            teams={teams}
+            players={players}
+            userRoster={userRoster}
+            freeAgents={waiverPool}
+            draftOrder={draftOrder}
+            onSignFreeAgent={handleSignOffseasonFA}
+            onReleasePlayer={handleReleasePlayer}
+            onProceedToDraft={proceedFromOffseasonFAToDraft}
+            onSelectPlayer={(p) => setSelectedPlayer(p)}
+          />
+        )}
+
         {activeTab === 'dashboard' && (
           <DashboardView
             year={year}
@@ -2183,7 +2670,7 @@ export default function App() {
             draftPicks={draftPicks}
             snapshots={seasonSnapshots}
             records={leagueRecords}
-            onAdvanceOffseason={advanceToOffseasonRookieDraft}
+            onAdvanceOffseason={advanceToOffseasonFreeAgency}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
             onNavigate={setActiveTab}
             onPlayLiveGame={todayUserMatchup ? () => setActiveTab('live') : undefined}
@@ -2241,6 +2728,7 @@ export default function App() {
             userRoster={userRoster}
             phase={phase}
             onReleasePlayer={handleReleasePlayer}
+            onExtendPlayer={handleExtendPlayer}
             onConfirmCuts={confirmRosterCutsComplete}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
           />
@@ -2261,6 +2749,7 @@ export default function App() {
         {activeTab === 'waivers' && (
           <WaiverPoolView
             waiverPool={waiverPool}
+            userTeam={userTeam}
             userRoster={userRoster}
             onClaimAndDrop={handleWaiverClaimAndDrop}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
@@ -2285,6 +2774,7 @@ export default function App() {
             year={year}
             phase={phase}
             userTeamId={userTeamId}
+            userTeam={userTeam}
             teamMap={teamMap}
             draftOrder={draftOrder}
             currentPickIdx={currentPickIdx}
@@ -2293,6 +2783,7 @@ export default function App() {
             userRoster={userRoster}
             draftPicks={draftPicks}
             onUserPick={handleUserDraftSelect}
+            onPassPick={handlePassUserDraftPick}
             onSimNext={handleSimNextPick}
             onSimToUser={handleSimToUserTurn}
             onAutoDraftAll={handleAutoDraftAll}
@@ -2304,6 +2795,18 @@ export default function App() {
           <TransactionsLogView transactions={transactions} championsHistory={championsHistory} />
         )}
       </main>
+
+      {/* Offseason Retirements Summary Modal */}
+      {retirementsSummary && (
+        <RetirementsModal
+          year={retirementsSummary.year}
+          retirements={retirementsSummary.retirements}
+          teamMap={teamMap}
+          expiringUserCount={retirementsSummary.expiringUserCount}
+          aiReSignedCount={retirementsSummary.aiReSignedCount}
+          onClose={() => setRetirementsSummary(null)}
+        />
+      )}
 
       {/* Dynamic Player Scouting Card Modal */}
       {selectedPlayer && (

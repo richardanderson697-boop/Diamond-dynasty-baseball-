@@ -61,7 +61,7 @@ service cloud.firestore {
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
         && data.userTeamId is string && data.userTeamId.size() >= 2 && data.userTeamId.size() <= 10 && data.userTeamId.matches('^[A-Z0-9]+$')
         && data.year is int && data.year >= 2020 && data.year <= 2200
-        && data.phase in ['SETUP', 'INAUGURAL_DRAFT', 'REGULAR_SEASON', 'PLAYOFFS_COMPLETE', 'ROOKIE_DRAFT', 'ROSTER_CUTS']
+        && data.phase in ['SETUP', 'INAUGURAL_DRAFT', 'REGULAR_SEASON', 'PLAYOFFS_COMPLETE', 'OFFSEASON_FA', 'ROOKIE_DRAFT', 'ROSTER_CUTS']
         && data.currentDay is int && data.currentDay >= 0 && data.currentDay <= 162
         && data.currentPickIdx is int && data.currentPickIdx >= 0 && data.currentPickIdx <= 1000
         && data.teams is list && data.teams.size() <= 32 && (data.teams.size() == 0 || data.teams[0] is map)
@@ -75,11 +75,13 @@ service cloud.firestore {
 
     function isValidStateChunk(data, franchiseId) {
       return data.keys().hasAll(['ownerId', 'franchiseId', 'chunkType', 'items', 'updatedAt'])
-        && data.keys().hasOnly(['ownerId', 'franchiseId', 'chunkType', 'items', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'])
+        && data.keys().hasOnly(['ownerId', 'franchiseId', 'chunkType', 'items', 'encoding', 'payload', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'])
         && data.ownerId is string && data.ownerId == request.auth.uid && isValidId(data.ownerId)
         && data.franchiseId is string && data.franchiseId == franchiseId && isValidId(data.franchiseId)
-        && data.chunkType in ['PLAYERS', 'DRAFT_AND_SCHEDULE']
+        && data.chunkType in ['PLAYERS', 'DRAFT_AND_SCHEDULE', 'COMPRESSED_BUNDLE']
         && data.items is list && data.items.size() <= 500 && (data.items.size() == 0 || data.items[0] is map)
+        && (!('encoding' in data) || (data.encoding is string && data.encoding.size() <= 20 && data.encoding in ['gzip-base64', 'json']))
+        && (!('payload' in data) || (data.payload is string && data.payload.size() >= 2 && data.payload.size() <= 900000))
         && (!('draftPicks' in data) || (data.draftPicks is list && data.draftPicks.size() <= 500 && (data.draftPicks.size() == 0 || data.draftPicks[0] is map)))
         && (!('draftOrder' in data) || (data.draftOrder is list && data.draftOrder.size() <= 1000 && (data.draftOrder.size() == 0 || data.draftOrder[0] is map)))
         && (!('draftHistory' in data) || (data.draftHistory is list && data.draftHistory.size() <= 1000 && (data.draftHistory.size() == 0 || data.draftHistory[0] is map)))
@@ -227,7 +229,7 @@ service cloud.firestore {
           && incoming().franchiseId == existing().franchiseId
           && incoming().updatedAt == request.time
           && incoming().diff(existing()).affectedKeys().hasOnly([
-            'chunkType', 'items', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'
+            'chunkType', 'items', 'encoding', 'payload', 'draftPicks', 'draftOrder', 'draftHistory', 'updatedAt'
           ]);
         allow delete: if isValidId(franchiseId) && isValidId(chunkId) && isVerified() && isFranchiseOwner(franchiseId);
       }

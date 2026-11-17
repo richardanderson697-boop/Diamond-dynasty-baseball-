@@ -3,6 +3,7 @@ export type GamePhase =
   | 'INAUGURAL_DRAFT'
   | 'REGULAR_SEASON'
   | 'PLAYOFFS_COMPLETE'
+  | 'OFFSEASON_FA'
   | 'ROOKIE_DRAFT'
   | 'ROSTER_CUTS';
 
@@ -60,6 +61,9 @@ export interface Player {
   teamId: string | null;
   ovr: number;
   potential: number;
+  salary?: number;
+  contractYears?: number;
+  previousTeamId?: string | null;
   power?: number;
   speed?: number;
   glove?: number;
@@ -71,6 +75,19 @@ export interface Player {
   seasonStats: Record<string, number>;
   careerStats: Record<string, number>;
   seasonHistory?: PlayerSeasonHistoryEntry[];
+}
+
+export interface RetiredPlayerSummary {
+  id: string;
+  name: string;
+  position: PlayerPosition;
+  isPitcher: boolean;
+  age: number;
+  ovr: number;
+  teamId: string | null;
+  salary: number;
+  reason: string;
+  careerLine: string;
 }
 
 export interface Team {
@@ -88,6 +105,7 @@ export interface Team {
   streak: number;
   last10: string[];
   championships: number;
+  deadCap?: number;
 }
 
 export interface DraftPick {

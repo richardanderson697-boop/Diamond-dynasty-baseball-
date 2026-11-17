@@ -35,6 +35,7 @@
             "INAUGURAL_DRAFT",
             "REGULAR_SEASON",
             "PLAYOFFS_COMPLETE",
+            "OFFSEASON_FA",
             "ROOKIE_DRAFT",
             "ROSTER_CUTS"
           ],
@@ -114,12 +115,24 @@
         },
         "chunkType": {
           "type": "string",
-          "enum": ["PLAYERS", "DRAFT_AND_SCHEDULE"],
-          "description": "Kind of partitioned state stored in this chunk."
+          "enum": ["PLAYERS", "DRAFT_AND_SCHEDULE", "COMPRESSED_BUNDLE"],
+          "description": "Kind of partitioned or compressed state stored in this chunk."
         },
         "items": {
           "type": "array",
           "description": "Bounded list of player objects or schedule/draft entries (max 500)."
+        },
+        "encoding": {
+          "type": "string",
+          "enum": ["gzip-base64", "json"],
+          "maxLength": 20,
+          "description": "Compression encoding used when chunkType is COMPRESSED_BUNDLE."
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 900000,
+          "description": "Compressed base64 or JSON string payload for COMPRESSED_BUNDLE chunks."
         },
         "draftPicks": {
           "type": "array",

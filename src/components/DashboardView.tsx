@@ -117,7 +117,7 @@ export function DashboardView({
               onClick={onAdvanceOffseason}
               className="px-5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition cursor-pointer whitespace-nowrap shrink-0"
             >
-              Proceed to {year + 1} Rookie Draft
+              Start {year + 1} Offseason &amp; Free Agency
             </button>
           </div>
         </div>
