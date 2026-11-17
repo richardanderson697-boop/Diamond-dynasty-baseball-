@@ -53,14 +53,20 @@ import {
   generateRookieClass,
   generateSeasonSchedule,
   getPlayerContractYears,
+  getPlayerEffectiveCapHit,
+  getPlayerILRelief,
   getPlayerSalary,
   getPlayerTradeValue,
   getRookieContractSalary,
   getTeamPayrollSummary,
   HARD_SALARY_CAP,
+  isActiveWaiverClaim,
+  isCapMoveLegal,
+  isPlayerOnIL,
   MIN_PLAYER_SALARY,
   normalizeLoadedPlayers,
   normalizeLoadedTeams,
+  processDailyInjuriesAndWaivers,
   resetPlayerCounter,
   ROOKIE_CONTRACT_YEARS,
   roundMoney,
@@ -71,6 +77,7 @@ import {
   simulatePlayoffs,
   simulateSingleGame,
   TEAM_CONFIGS,
+  WAIVER_PERIOD_DAYS,
 } from './engine/baseballEngine';
 import {
   deleteFranchiseFromCloud,
@@ -581,17 +588,28 @@ export default function App() {
 
   const playersByTeam = useMemo(() => {
     const map: Record<string, Player[]> = {};
+    const activeMap: Record<string, Player[]> = {};
     teams.forEach((t) => {
       map[t.id] = [];
+      activeMap[t.id] = [];
     });
     const waivers: Player[] = [];
     players.forEach((p) => {
-      if (p.teamId && map[p.teamId]) map[p.teamId].push(p);
-      else waivers.push(p);
+      if (p.teamId && map[p.teamId]) {
+        map[p.teamId].push(p);
+        if (!isPlayerOnIL(p)) {
+          activeMap[p.teamId].push(p);
+        }
+      } else {
+        waivers.push(p);
+      }
     });
-    Object.keys(map).forEach((tid) => map[tid].sort((a, b) => b.ovr - a.ovr));
+    Object.keys(map).forEach((tid) => {
+      map[tid].sort((a, b) => b.ovr - a.ovr);
+      activeMap[tid].sort((a, b) => b.ovr - a.ovr);
+    });
     waivers.sort((a, b) => b.ovr - a.ovr);
-    return { byTeam: map, waivers };
+    return { byTeam: map, activeByTeam: activeMap, waivers };
   }, [players, teams]);
 
   const userCapSummary = useMemo(
@@ -1172,6 +1190,7 @@ export default function App() {
     const workingPlayers: Player[] = players.map((p) => ({
       ...p,
       seasonStats: { ...p.seasonStats },
+      injury: p.injury ? { ...p.injury } : null,
     }));
 
     const tLookup: Record<string, Team> = {};
@@ -1251,39 +1270,17 @@ export default function App() {
         }
       }
 
-      if (d > 10 && d < 145 && d % 12 === 0) {
-        const waivers = workingPlayers.filter((p) => !p.teamId).sort((a, b) => b.ovr - a.ovr);
-        if (waivers.length > 0) {
-          const aiTeams = workingTeams.filter((t) => t.id !== userTeamId);
-          const randomAI = aiTeams[Math.floor(Math.random() * aiTeams.length)];
-          const aiRoster = rosterLookup[randomAI.id].sort((a, b) => a.ovr - b.ovr);
-          const aiSummary = getTeamPayrollSummary(randomAI, aiRoster);
-          const weakest = aiRoster[0];
-          const topFA = waivers.find((cand) => {
-            if (!weakest || cand.ovr <= weakest.ovr + 4) return false;
-            const deadHit = computeReleaseDeadCap(weakest);
-            const post = roundMoney(
-              aiSummary.totalPayroll + getPlayerSalary(cand) - getPlayerSalary(weakest) + deadHit
-            );
-            return post <= HARD_SALARY_CAP;
-          });
-          if (topFA && weakest) {
-            const deadHit = computeReleaseDeadCap(weakest);
-            if (deadHit > 0) {
-              randomAI.deadCap = roundMoney((randomAI.deadCap || 0) + deadHit);
-            }
-            topFA.teamId = randomAI.id;
-            weakest.teamId = null;
-            rosterLookup[randomAI.id] = [...aiRoster.slice(1), topFA];
-            aiLogs.push({
-              id: `ai-w-${d}-${randomAI.id}`,
-              year,
-              day: d + 1,
-              category: 'WAIVER',
-              summary: `${randomAI.city} ${randomAI.name} claimed ${topFA.position} ${topFA.name} (${topFA.ovr} OVR · ${formatMoney(getPlayerSalary(topFA))}) and waived ${weakest.name}.`,
-            });
-          }
-        }
+      const dailyLogs = processDailyInjuriesAndWaivers({
+        nextDay: d + 1,
+        teams: workingTeams,
+        players: workingPlayers,
+        tLookup,
+        rosterLookup,
+        userTeamId,
+        year,
+      });
+      if (dailyLogs.length > 0) {
+        aiLogs.unshift(...dailyLogs);
       }
 
       if (d > 30 && d < 115 && d % 25 === 0) {
@@ -1291,23 +1288,27 @@ export default function App() {
         const t1 = aiTeams[Math.floor(Math.random() * aiTeams.length)];
         const t2 = aiTeams.find((t) => t.id !== t1.id && t.league !== t1.league);
         if (t1 && t2) {
-          const r1 = rosterLookup[t1.id].sort((a, b) => b.ovr - a.ovr);
-          const r2 = rosterLookup[t2.id].sort((a, b) => b.ovr - a.ovr);
+          const r1All = rosterLookup[t1.id] || [];
+          const r2All = rosterLookup[t2.id] || [];
+          const r1 = r1All.filter((p) => !isPlayerOnIL(p)).sort((a, b) => b.ovr - a.ovr);
+          const r2 = r2All.filter((p) => !isPlayerOnIL(p)).sort((a, b) => b.ovr - a.ovr);
           const p1 = r1[Math.floor(Math.random() * Math.min(8, r1.length)) + Math.min(4, Math.max(0, r1.length - 1))];
           const p2 = r2.find((cand) => {
             if (!p1 || cand.id === p1.id) return false;
             if (Math.abs(getPlayerTradeValue(cand) - getPlayerTradeValue(p1)) >= 85) return false;
-            const s1 = getTeamPayrollSummary(t1, r1);
-            const s2 = getTeamPayrollSummary(t2, r2);
-            const post1 = roundMoney(s1.totalPayroll - getPlayerSalary(p1) + getPlayerSalary(cand));
-            const post2 = roundMoney(s2.totalPayroll - getPlayerSalary(cand) + getPlayerSalary(p1));
-            return post1 <= HARD_SALARY_CAP && post2 <= HARD_SALARY_CAP;
+            const s1 = getTeamPayrollSummary(t1, r1All);
+            const s2 = getTeamPayrollSummary(t2, r2All);
+            const post1 = roundMoney(s1.totalPayroll - getPlayerEffectiveCapHit(p1) + getPlayerEffectiveCapHit(cand));
+            const post2 = roundMoney(s2.totalPayroll - getPlayerEffectiveCapHit(cand) + getPlayerEffectiveCapHit(p1));
+            return isCapMoveLegal(s1.totalPayroll, post1) && isCapMoveLegal(s2.totalPayroll, post2);
           });
           if (p1 && p2) {
             p1.teamId = t2.id;
+            p1.previousTeamId = t2.id;
             p2.teamId = t1.id;
-            rosterLookup[t1.id] = rosterLookup[t1.id].filter((p) => p.id !== p1.id).concat(p2);
-            rosterLookup[t2.id] = rosterLookup[t2.id].filter((p) => p.id !== p2.id).concat(p1);
+            p2.previousTeamId = t1.id;
+            rosterLookup[t1.id] = r1All.filter((p) => p.id !== p1.id).concat(p2);
+            rosterLookup[t2.id] = r2All.filter((p) => p.id !== p2.id).concat(p1);
             aiLogs.push({
               id: `ai-tr-${d}-${t1.id}`,
               year,
@@ -1317,6 +1318,18 @@ export default function App() {
             });
           }
         }
+      }
+    }
+
+    const userInjuryLog = aiLogs.find((l) => l.category === 'INJURY' && l.summary.startsWith(`${userTeamId} `));
+    if (userInjuryLog && targetDay < 162) {
+      showToast(userInjuryLog.summary, 'warning');
+    } else {
+      const userRebateLog = aiLogs.find(
+        (l) => l.category === 'WAIVER' && l.summary.includes(`(${userTeamId} saved `)
+      );
+      if (userRebateLog && targetDay < 162) {
+        showToast(userRebateLog.summary, 'success');
       }
     }
 
@@ -1579,9 +1592,9 @@ export default function App() {
   // ==========================================================================
 
   const handleSignOffseasonFA = (playerId: string, contractYears: number) => {
-    const userRoster = playersByTeam.byTeam[userTeamId] || [];
-    if (userRoster.length >= 30) {
-      showToast('Roster is full (30/30). Release a player first.', 'error');
+    const activeUserRoster = playersByTeam.activeByTeam[userTeamId] || [];
+    if (activeUserRoster.length >= 30) {
+      showToast('Active roster is full (30/30). Release a player first.', 'error');
       return;
     }
     const target = players.find((p) => p.id === playerId && !p.teamId);
@@ -1589,9 +1602,11 @@ export default function App() {
 
     const offer = calculateExtensionOffer(target, contractYears);
     const postPayroll = roundMoney(userCapSummary.totalPayroll + offer.salary);
-    if (postPayroll > HARD_SALARY_CAP) {
+    if (!isCapMoveLegal(userCapSummary.totalPayroll, postPayroll)) {
       showToast(
-        `Signing blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        userCapSummary.overCap
+          ? `Signing blocked: over $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap — cannot add payroll.`
+          : `Signing blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
         'error'
       );
       return;
@@ -1606,6 +1621,10 @@ export default function App() {
             previousTeamId: userTeamId,
             salary: offer.salary,
             contractYears: offer.years,
+            waivedByTeamId: null,
+            waivedDeadCapHit: 0,
+            waiverExpiresDay: null,
+            injury: null,
           }
         : p
     );
@@ -1633,11 +1652,13 @@ export default function App() {
 
     const offer = calculateExtensionOffer(target, contractYears);
     const postPayroll = roundMoney(
-      userCapSummary.totalPayroll - getPlayerSalary(target) + offer.salary
+      userCapSummary.totalPayroll - getPlayerEffectiveCapHit(target) + offer.salary
     );
-    if (postPayroll > HARD_SALARY_CAP) {
+    if (!isCapMoveLegal(userCapSummary.totalPayroll, postPayroll)) {
       showToast(
-        `Extension blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        userCapSummary.overCap
+          ? `Extension blocked: over $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap — move must lower payroll.`
+          : `Extension blocked: ${formatMoney(postPayroll)} exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
         'error'
       );
       return;
@@ -1666,12 +1687,12 @@ export default function App() {
   };
 
   const handleWaiverClaimAndDrop = (claimPlayerId: string, dropPlayerId: string | null) => {
-    const userRoster = playersByTeam.byTeam[userTeamId] || [];
+    const activeUserRoster = playersByTeam.activeByTeam[userTeamId] || [];
     const claimPlr = players.find((p) => p.id === claimPlayerId && !p.teamId);
     if (!claimPlr) return;
 
-    if (userRoster.length >= 30 && !dropPlayerId) {
-      showToast('Your 30-man roster is full. Select a player to release.', 'error');
+    if (activeUserRoster.length >= 30 && !dropPlayerId) {
+      showToast('Your 30-man active roster is full. Select a player to waive.', 'error');
       return;
     }
 
@@ -1679,39 +1700,74 @@ export default function App() {
       ? players.find((p) => p.id === dropPlayerId && p.teamId === userTeamId)
       : null;
 
-    const claimSal = getPlayerSalary(claimPlr);
-    const dropSal = dropPlr ? getPlayerSalary(dropPlr) : 0;
+    const activeWaiver = isActiveWaiverClaim(claimPlr, currentDay);
+    const claimSal = activeWaiver ? getPlayerSalary(claimPlr) : MIN_PLAYER_SALARY;
+    const claimYears = activeWaiver ? getPlayerContractYears(claimPlr) : 1;
+    const dropSal = dropPlr ? getPlayerEffectiveCapHit(dropPlr) : 0;
     const deadHit = dropPlr ? computeReleaseDeadCap(dropPlr) : 0;
     const postPayroll = roundMoney(userCapSummary.totalPayroll + claimSal - dropSal + deadHit);
 
-    if (postPayroll > HARD_SALARY_CAP) {
+    if (!isCapMoveLegal(userCapSummary.totalPayroll, postPayroll)) {
       showToast(
-        `Waiver claim blocked: post-claim payroll (${formatMoney(postPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
+        userCapSummary.overCap
+          ? `Move blocked: over $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap — post-move payroll (${formatMoney(postPayroll)}) must be lower than ${formatMoney(userCapSummary.totalPayroll)}.`
+          : `Waiver claim blocked: post-claim payroll (${formatMoney(postPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`,
         'error'
       );
       return;
     }
 
-    const nextTeams =
-      deadHit > 0
-        ? teams.map((t) =>
-            t.id === userTeamId
-              ? { ...t, deadCap: roundMoney((t.deadCap || 0) + deadHit) }
-              : t
-          )
-        : teams;
+    const rebatedTeamId = activeWaiver ? claimPlr.waivedByTeamId || null : null;
+    const rebatedAmount = activeWaiver ? claimPlr.waivedDeadCapHit || 0 : 0;
+
+    const nextTeams = teams.map((t) => {
+      let dc = t.deadCap || 0;
+      if (t.id === userTeamId && deadHit > 0) {
+        dc = roundMoney(dc + deadHit);
+      }
+      if (rebatedTeamId && t.id === rebatedTeamId && rebatedAmount > 0) {
+        dc = Math.max(0, roundMoney(dc - rebatedAmount));
+      }
+      return dc !== (t.deadCap || 0) ? { ...t, deadCap: dc } : t;
+    });
 
     const nextPlayers = players.map((p) => {
-      if (p.id === claimPlayerId) return { ...p, teamId: userTeamId, previousTeamId: userTeamId };
-      if (dropPlr && p.id === dropPlr.id) return { ...p, teamId: null };
+      if (p.id === claimPlayerId) {
+        return {
+          ...p,
+          teamId: userTeamId,
+          previousTeamId: userTeamId,
+          salary: claimSal,
+          contractYears: claimYears,
+          waivedByTeamId: null,
+          waivedDeadCapHit: 0,
+          waiverExpiresDay: null,
+          injury: p.injury ? { ...p.injury, onIL: null } : null,
+        };
+      }
+      if (dropPlr && p.id === dropPlr.id) {
+        return {
+          ...p,
+          teamId: null,
+          waivedByTeamId: userTeamId,
+          waivedDeadCapHit: deadHit,
+          waiverExpiresDay: currentDay + WAIVER_PERIOD_DAYS,
+          injury: p.injury ? { ...p.injury, onIL: null } : null,
+        };
+      }
       return p;
     });
 
+    const claimVerb = activeWaiver ? 'claimed' : 'signed FA';
+    const rebateNote =
+      rebatedTeamId && rebatedAmount > 0
+        ? ` (${rebatedTeamId} dead cap wiped -$${rebatedAmount.toFixed(2)}M)`
+        : '';
     const msg = dropPlr
-      ? `${userTeamId} claimed ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}) and waived ${dropPlr.name}${deadHit > 0 ? ` (+${formatMoney(deadHit)} dead cap)` : ''}.`
-      : `${userTeamId} signed ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}) from waivers.`;
+      ? `${userTeamId} ${claimVerb} ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}${activeWaiver ? '' : '/1y'}) and waived ${dropPlr.name}${deadHit > 0 ? ` (+${formatMoney(deadHit)} dead cap)` : ''}${rebateNote}.`
+      : `${userTeamId} ${claimVerb} ${claimPlr.position} ${claimPlr.name} (${formatMoney(claimSal)}${activeWaiver ? '' : '/1y'})${rebateNote}.`;
     const nextTx = [
-      { id: `wv-${Date.now()}`, year, day: currentDay, category: 'WAIVER', summary: msg },
+      { id: `wv-${Date.now()}`, year, day: currentDay, category: activeWaiver ? 'WAIVER' : 'SIGNING', summary: msg },
       ...transactions.slice(0, 148),
     ];
 
@@ -1733,6 +1789,7 @@ export default function App() {
     if (!dropPlr) return;
 
     const deadHit = computeReleaseDeadCap(dropPlr);
+    const netSavings = roundMoney(getPlayerEffectiveCapHit(dropPlr) - deadHit);
     const nextTeams =
       deadHit > 0
         ? teams.map((t) =>
@@ -1742,10 +1799,19 @@ export default function App() {
           )
         : teams;
 
-    const nextPlayers = players.map((p) => (p.id === dropPlayerId ? { ...p, teamId: null } : p));
-    const msg = `${userTeamId} released ${dropPlr.position} ${dropPlr.name} (${dropPlr.ovr}) to the Waiver Pool${
-      deadHit > 0 ? ` — ${formatMoney(deadHit)} added to Dead Cap` : ''
-    }.`;
+    const nextPlayers = players.map((p) =>
+      p.id === dropPlayerId
+        ? {
+            ...p,
+            teamId: null,
+            waivedByTeamId: userTeamId,
+            waivedDeadCapHit: deadHit,
+            waiverExpiresDay: currentDay + WAIVER_PERIOD_DAYS,
+            injury: p.injury ? { ...p.injury, onIL: null } : null,
+          }
+        : p
+    );
+    const msg = `${userTeamId} waived ${dropPlr.position} ${dropPlr.name} (${dropPlr.ovr}) — +${formatMoney(deadHit)} dead cap (${netSavings >= 0 ? `saves ${formatMoney(netSavings)} cap` : 'IL override'}); resets to $0 if claimed in 2d.`;
     const nextTx = [
       { id: `rel-${Date.now()}`, year, day: currentDay, category: 'WAIVER', summary: msg },
       ...transactions.slice(0, 148),
@@ -1755,9 +1821,7 @@ export default function App() {
     setPlayers(nextPlayers);
     setTransactions(nextTx);
     showToast(
-      deadHit > 0
-        ? `Released ${dropPlr.name} (+${formatMoney(deadHit)} Dead Cap).`
-        : `Released ${dropPlr.name} to waivers.`,
+      `Waived ${dropPlr.name} (+${formatMoney(deadHit)} Dead Cap · 2-day waiver wire).`,
       'info'
     );
     void persistToCloud({
@@ -1769,15 +1833,96 @@ export default function App() {
     });
   };
 
+  const handlePlaceOnIL = (playerId: string, tier: '15' | '60') => {
+    const target = players.find((p) => p.id === playerId && p.teamId === userTeamId);
+    if (!target || !target.injury || target.injury.onIL) return;
+    if (target.injury.severity === 'DTD') {
+      showToast('Day-to-Day injuries cannot be placed on the 15/60-Day IL.', 'error');
+      return;
+    }
+
+    const actualTier: '15' | '60' = target.injury.severity === 'IL60' && tier === '60' ? '60' : '15';
+    const updatedPlr: Player = {
+      ...target,
+      injury: { ...target.injury, onIL: actualTier },
+    };
+    const relief = getPlayerILRelief(updatedPlr);
+
+    const nextPlayers = players.map((p) => (p.id === playerId ? updatedPlr : p));
+    const msg = `${userTeamId} placed ${target.position} ${target.name} on ${actualTier}-Day IL (${target.injury.type}, ${target.injury.daysRemaining}d · +${formatMoney(relief)} cap space freed).`;
+    const nextTx = [
+      { id: `il-${Date.now()}`, year, day: currentDay, category: 'INJURY', summary: msg },
+      ...transactions.slice(0, 148),
+    ];
+
+    setPlayers(nextPlayers);
+    setTransactions(nextTx);
+    showToast(
+      `Placed ${target.name} on ${actualTier}-Day IL (+${formatMoney(relief)} Cap Space & 1 active slot).`,
+      'success'
+    );
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
+  };
+
+  const handleActivateFromIL = (playerId: string) => {
+    const target = players.find((p) => p.id === playerId && p.teamId === userTeamId);
+    if (!target || !target.injury?.onIL) return;
+
+    if (target.injury.daysRemaining > 0) {
+      showToast(`${target.name} still needs ${target.injury.daysRemaining} day(s) of rehab before activation.`, 'error');
+      return;
+    }
+
+    const activeUserRoster = playersByTeam.activeByTeam[userTeamId] || [];
+    if (activeUserRoster.length >= 30) {
+      showToast('Active roster is full (30/30). Waive a player before activating from the IL.', 'error');
+      return;
+    }
+
+    const addedCap = getPlayerILRelief(target);
+    const postPayroll = roundMoney(userCapSummary.totalPayroll + addedCap);
+    if (!isCapMoveLegal(userCapSummary.totalPayroll, postPayroll)) {
+      showToast(
+        `Activation blocked: adding ${formatMoney(addedCap)} back brings payroll to ${formatMoney(postPayroll)} (over $${HARD_SALARY_CAP.toFixed(1)}M Cap). Waive or trade salary first.`,
+        'error'
+      );
+      return;
+    }
+
+    const nextPlayers = players.map((p) =>
+      p.id === playerId ? { ...p, injury: null } : p
+    );
+    const msg = `${userTeamId} activated ${target.position} ${target.name} from the ${target.injury.onIL}-Day IL.`;
+    const nextTx = [
+      { id: `act-${Date.now()}`, year, day: currentDay, category: 'ROSTER', summary: msg },
+      ...transactions.slice(0, 148),
+    ];
+
+    setPlayers(nextPlayers);
+    setTransactions(nextTx);
+    showToast(msg, 'success');
+    void persistToCloud({
+      includePlayers: true,
+      includeScheduleAndDraft: false,
+      players: nextPlayers,
+      transactions: nextTx,
+    });
+  };
+
   const confirmRosterCutsComplete = () => {
-    const userRoster = playersByTeam.byTeam[userTeamId] || [];
-    if (userRoster.length > 30) {
-      showToast(`Release ${userRoster.length - 30} more player(s) to reach the 30-man limit.`, 'error');
+    const activeUserRoster = playersByTeam.activeByTeam[userTeamId] || [];
+    if (activeUserRoster.length > 30) {
+      showToast(`Waive ${activeUserRoster.length - 30} more active player(s) to reach the 30-man limit.`, 'error');
       return;
     }
     if (userCapSummary.overCap) {
       showToast(
-        `Payroll (${formatMoney(userCapSummary.totalPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap. Release salary first.`,
+        `Payroll (${formatMoney(userCapSummary.totalPayroll)}) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap. Waive or trade salary first.`,
         'error'
       );
       return;
@@ -1944,9 +2089,14 @@ export default function App() {
     });
 
     const customSalary = calculateFairSalary(ovr, params.age, params.potential);
+    const activeUserRosterCount = (playersByTeam.activeByTeam[userTeamId] || []).length;
+    if (params.targetDestination === 'ROSTER' && activeUserRosterCount >= 30) {
+      showToast('Active roster is full (30/30). Waive a player or place someone on IL first.', 'error');
+      return;
+    }
     if (
       params.targetDestination === 'ROSTER' &&
-      roundMoney(userCapSummary.totalPayroll + customSalary) > HARD_SALARY_CAP
+      !isCapMoveLegal(userCapSummary.totalPayroll, roundMoney(userCapSummary.totalPayroll + customSalary))
     ) {
       showToast(
         `Cannot add custom player to active roster: ${formatMoney(
@@ -2334,6 +2484,7 @@ export default function App() {
   // ==========================================================================
 
   const userRoster = playersByTeam.byTeam[userTeamId] || [];
+  const activeUserRoster = playersByTeam.activeByTeam[userTeamId] || [];
   const waiverPool = playersByTeam.waivers || [];
   const isDraftPhase = phase === 'INAUGURAL_DRAFT' || phase === 'ROOKIE_DRAFT';
   const isOffseasonFA = phase === 'OFFSEASON_FA';
@@ -2351,7 +2502,7 @@ export default function App() {
     },
     { id: 'trends', label: 'Trends', icon: TrendingUp, disabled: isDraftPhase },
     { id: 'cards', label: `Player Cards (${savedCards.length})`, icon: IdCard, disabled: false },
-    { id: 'roster', label: `Roster (${userRoster.length}/30)`, icon: Users, disabled: false },
+    { id: 'roster', label: `Roster (${activeUserRoster.length}/30)`, icon: Users, disabled: false },
     { id: 'standings', label: 'Standings & Records', icon: BarChart3, disabled: isDraftPhase },
     { id: 'waivers', label: `Waivers (${waiverPool.length})`, icon: UserPlus, disabled: isDraftPhase || isOffseasonFA },
     { id: 'trades', label: 'Trade Center', icon: ArrowLeftRight, disabled: isDraftPhase },
@@ -2424,6 +2575,17 @@ export default function App() {
                     {formatMoney(userCapSummary.deadCap)}
                   </strong>
                 </span>
+                {userCapSummary.ilRelief > 0 && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      IL Relief{' '}
+                      <strong className="text-sky-400">
+                        +{formatMoney(userCapSummary.ilRelief)}
+                      </strong>
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -2482,7 +2644,7 @@ export default function App() {
                 onClick={confirmRosterCutsComplete}
                 className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-bold transition cursor-pointer whitespace-nowrap"
               >
-                <Check className="w-4 h-4" /> Finalize Roster ({userRoster.length}/30)
+                <Check className="w-4 h-4" /> Finalize Roster ({activeUserRoster.length}/30)
               </button>
             )}
 
@@ -2714,7 +2876,7 @@ export default function App() {
             savedCards={savedCards}
             teamMap={teamMap}
             userTeam={userTeam}
-            userRosterCount={userRoster.length}
+            userRosterCount={activeUserRoster.length}
             canSaveToCloud={Boolean(authUser && activeFranchiseId)}
             onCreateCustomCard={handleCreateCustomCard}
             onDeleteCard={handleDeleteCard}
@@ -2729,6 +2891,8 @@ export default function App() {
             phase={phase}
             onReleasePlayer={handleReleasePlayer}
             onExtendPlayer={handleExtendPlayer}
+            onPlaceOnIL={handlePlaceOnIL}
+            onActivateFromIL={handleActivateFromIL}
             onConfirmCuts={confirmRosterCutsComplete}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
           />
@@ -2751,6 +2915,8 @@ export default function App() {
             waiverPool={waiverPool}
             userTeam={userTeam}
             userRoster={userRoster}
+            currentDay={currentDay}
+            teamMap={teamMap}
             onClaimAndDrop={handleWaiverClaimAndDrop}
             onSelectPlayer={(p) => setSelectedPlayer(p)}
           />

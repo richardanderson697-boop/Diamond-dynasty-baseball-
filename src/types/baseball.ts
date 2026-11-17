@@ -50,6 +50,15 @@ export interface PlayerSeasonHistoryEntry {
   stats: Record<string, number>;
 }
 
+export type InjurySeverity = 'DTD' | 'IL15' | 'IL60';
+
+export interface PlayerInjury {
+  type: string;
+  severity: InjurySeverity;
+  daysRemaining: number;
+  onIL?: '15' | '60' | null;
+}
+
 export interface Player {
   id: string;
   name: string;
@@ -64,6 +73,10 @@ export interface Player {
   salary?: number;
   contractYears?: number;
   previousTeamId?: string | null;
+  waivedByTeamId?: string | null;
+  waivedDeadCapHit?: number;
+  waiverExpiresDay?: number | null;
+  injury?: PlayerInjury | null;
   power?: number;
   speed?: number;
   glove?: number;

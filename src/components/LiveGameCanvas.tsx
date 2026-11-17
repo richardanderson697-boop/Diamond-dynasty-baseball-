@@ -72,6 +72,11 @@ interface PlayLogEntry {
   tone: 'normal' | 'hit' | 'hr' | 'out' | 'manager' | 'hl';
 }
 
+let playLogSeq = 1;
+function nextLogId(): number {
+  return playLogSeq++;
+}
+
 interface InningScore {
   top: number | null;
   bot: number | null;
@@ -306,7 +311,7 @@ function createInitialGameState(
     lastPlayBanner: `First pitch ready at ${stadium.name} (${awayTeam.id} @ ${homeTeam.id})`,
     logs: [
       {
-        id: 1,
+        id: nextLogId(),
         inningLabel: 'PRE',
         text: `Play ball at ${stadium.name}. Starters: ${awaySP?.name || 'SP'} (${awayTeam.id}) vs. ${homeSP?.name || 'SP'} (${homeTeam.id}).`,
         tone: 'normal',
@@ -403,7 +408,7 @@ function maybeAutoSwitchAIPitcher(state: ActiveGameState, userTeamId: string, ho
 
   const nextLogs: PlayLogEntry[] = [
     {
-      id: Date.now() + Math.random(),
+      id: nextLogId(),
       inningLabel: `${isTop ? 'T' : 'B'}${state.inning}`,
       text: `${defTeamId} pitching change: ${nextP.name} (${nextP.ovr} OVR) enters from the bullpen.`,
       tone: 'manager',
@@ -789,7 +794,7 @@ function resolvePlateOutcome(
     lastPlayBanner: logText,
     logs: [
       {
-        id: Date.now() + Math.random(),
+        id: nextLogId(),
         inningLabel: `${isTop ? 'T' : 'B'}${state.inning}`,
         text: logText,
         tone: logTone,
@@ -804,7 +809,7 @@ function resolvePlateOutcome(
       ...nextState,
       logs: [
         {
-          id: Date.now() + 99,
+          id: nextLogId(),
           inningLabel: `B${nextState.inning}`,
           text: `WALK-OFF VICTORY! ${homeId} wins ${nextState.homeRuns}-${nextState.awayRuns}!`,
           tone: 'hr',
@@ -1140,7 +1145,7 @@ export function LiveGameCanvas({
         lastPlayBanner: `HIGH-LEVERAGE MOMENT: ${cur.half === 'TOP' ? 'Top' : 'Bot'} ${cur.inning} · RISP · Margin ${Math.abs(cur.homeRuns - cur.awayRuns)}`,
         logs: [
           {
-            id: Date.now() + 7,
+            id: nextLogId(),
             inningLabel: `${cur.half === 'TOP' ? 'T' : 'B'}${cur.inning}`,
             text: `Manager Alert: High-leverage spot reached (Inning ${cur.inning}, RISP, close game).`,
             tone: 'hl',
@@ -1185,7 +1190,7 @@ export function LiveGameCanvas({
       lastPlayBanner: `Manager Call: ${reliever.name} (${reliever.ovr} OVR) enters on the mound`,
       logs: [
         {
-          id: Date.now(),
+          id: nextLogId(),
           inningLabel: `${isTop ? 'T' : 'B'}${cur.inning}`,
           text: `${defId} manager calls to the bullpen: ${reliever.name} (${reliever.ovr} OVR) takes over.`,
           tone: 'manager',
@@ -1218,7 +1223,7 @@ export function LiveGameCanvas({
       lastPlayBanner: `Pinch Hitter: ${pinchHitter.name} steps in for ${replaced.name}`,
       logs: [
         {
-          id: Date.now(),
+          id: nextLogId(),
           inningLabel: `${isTop ? 'T' : 'B'}${cur.inning}`,
           text: `Pinch hitter ${pinchHitter.name} (${pinchHitter.ovr} OVR) hits for ${replaced.name}.`,
           tone: 'manager',
@@ -1292,7 +1297,7 @@ export function LiveGameCanvas({
         lastPlayBanner: text,
         logs: [
           {
-            id: Date.now(),
+            id: nextLogId(),
             inningLabel: `${isTop ? 'T' : 'B'}${cur.inning}`,
             text,
             tone: isSafe ? 'hit' : 'out',
@@ -1608,8 +1613,10 @@ export function LiveGameCanvas({
         }
       });
 
-      // Animation progress [0..1]
-      const elapsed = anim.active ? Math.min(1, (now - anim.startMs) / anim.durationMs) : 0;
+      // Animation progress [0..1] (clamp handles rAF timestamp slightly preceding performance.now())
+      const elapsed = anim.active
+        ? clamp((now - anim.startMs) / Math.max(1, anim.durationMs), 0, 1)
+        : 0;
 
       // 5. Draw 9 Defensive Fielders (with L/R & Infield-In shift + pursuit toward ball)
       const batterSide = resolveBatterSide(curBatter, curPitcher);
@@ -1674,12 +1681,14 @@ export function LiveGameCanvas({
       if (anim.active && anim.advancingRunners.length > 0) {
         anim.advancingRunners.forEach((ar) => {
           animatedFromSet.add(ar.from);
-          const totalBases = ar.to - ar.from;
-          const prog = elapsed * totalBases;
-          const curSeg = Math.min(totalBases - 1, Math.floor(prog));
-          const segT = prog - curSeg;
-          const fromB = bases[(ar.from + curSeg) % 4];
-          const toB = bases[(ar.from + curSeg + 1) % 4];
+          const totalBases = Math.max(1, ar.to - ar.from);
+          const prog = Math.max(0, elapsed * totalBases);
+          const curSeg = Math.max(0, Math.min(totalBases - 1, Math.floor(prog)));
+          const segT = clamp(prog - curSeg, 0, 1);
+          const fromIdx = (((ar.from + curSeg) % 4) + 4) % 4;
+          const toIdx = (((ar.from + curSeg + 1) % 4) + 4) % 4;
+          const fromB = bases[fromIdx] || bases[0];
+          const toB = bases[toIdx] || bases[0];
           const rx = fromB.x + (toB.x - fromB.x) * segT;
           const ry = fromB.y + (toB.y - fromB.y) * segT;
           drawPlayerSprite(rx, ry - 2, curBatTeam.color, curBatTeam.accent, undefined, 0.95);

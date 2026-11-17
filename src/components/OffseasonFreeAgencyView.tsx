@@ -168,7 +168,7 @@ export function OffseasonFreeAgencyView({
             <div className="text-lg font-extrabold font-mono tabular-nums text-rose-300 mt-0.5">
               {formatMoney(userSummary.deadCap)}
             </div>
-            <div className="text-[11px] text-slate-500">50% of cut multi-yr deals</div>
+            <div className="text-[11px] text-slate-500">50% 1-yr hit ($0 if claimed)</div>
           </div>
 
           <div className="bg-slate-950/80 border border-slate-800 rounded-lg p-3">
@@ -468,7 +468,7 @@ export function OffseasonFreeAgencyView({
               Under-Contract Roster ({userRoster.length}/30)
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Releasing a player with more than 1 year remaining applies 50% of their remaining total contract value to current-year Dead Cap.
+              Releasing a player removes 100% of their active salary and applies only 50% of their current-year salary to Dead Cap (wiped to $0 if claimed off waivers).
             </p>
           </div>
           <div className="overflow-x-auto">

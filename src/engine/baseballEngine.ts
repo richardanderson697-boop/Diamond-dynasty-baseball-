@@ -3,8 +3,10 @@ import {
   DraftSlot,
   DivisionSnapshotTeam,
   HitterPosition,
+  InjurySeverity,
   LeagueRecord,
   Player,
+  PlayerInjury,
   PlayerPosition,
   PlayoffResults,
   RetiredPlayerSummary,
@@ -19,6 +21,7 @@ export const SALARY_FLOOR = 90.0;
 export const MIN_PLAYER_SALARY = 0.75;
 export const AI_CAP_RELIEF_THRESHOLD = 155.0;
 export const ROOKIE_CONTRACT_YEARS = 3;
+export const WAIVER_PERIOD_DAYS = 2;
 
 export function roundMoney(val: number): number {
   if (!Number.isFinite(val)) return MIN_PLAYER_SALARY;
@@ -105,7 +108,43 @@ export function getTeamDeadCap(team: Pick<Team, 'deadCap'> | undefined): number 
   return 0;
 }
 
+export function getPlayerILRelief(player: Pick<Player, 'salary' | 'ovr' | 'age' | 'potential' | 'injury'>): number {
+  const sal = getPlayerSalary(player);
+  if (player.injury?.onIL === '60') return sal;
+  if (player.injury?.onIL === '15') return roundMoney(sal * 0.5);
+  return 0;
+}
+
+export function getPlayerEffectiveCapHit(player: Pick<Player, 'salary' | 'ovr' | 'age' | 'potential' | 'injury'>): number {
+  const sal = getPlayerSalary(player);
+  if (player.injury?.onIL === '60') return 0;
+  if (player.injury?.onIL === '15') return roundMoney(sal * 0.5);
+  return sal;
+}
+
+export function isPlayerOnIL(player: Pick<Player, 'injury'>): boolean {
+  return player.injury?.onIL === '15' || player.injury?.onIL === '60';
+}
+
+export function isCapMoveLegal(prePayroll: number, postPayroll: number): boolean {
+  const pre = roundMoney(prePayroll);
+  const post = roundMoney(postPayroll);
+  if (post <= HARD_SALARY_CAP) return true;
+  return pre > HARD_SALARY_CAP && post < pre;
+}
+
+export function isActiveWaiverClaim(player: Pick<Player, 'teamId' | 'waiverExpiresDay'>, currentDay: number): boolean {
+  return (
+    !player.teamId &&
+    typeof player.waiverExpiresDay === 'number' &&
+    Number.isFinite(player.waiverExpiresDay) &&
+    currentDay <= player.waiverExpiresDay
+  );
+}
+
 export interface TeamPayrollSummary {
+  grossPayroll: number;
+  ilRelief: number;
   activePayroll: number;
   deadCap: number;
   totalPayroll: number;
@@ -120,12 +159,16 @@ export function getTeamPayrollSummary(
   team: Team | undefined,
   roster: Player[]
 ): TeamPayrollSummary {
-  const activePayroll = roundMoney(roster.reduce((sum, p) => sum + getPlayerSalary(p), 0));
+  const grossPayroll = roundMoney(roster.reduce((sum, p) => sum + getPlayerSalary(p), 0));
+  const ilRelief = roundMoney(roster.reduce((sum, p) => sum + getPlayerILRelief(p), 0));
+  const activePayroll = roundMoney(Math.max(0, grossPayroll - ilRelief));
   const deadCap = getTeamDeadCap(team);
   const totalPayroll = roundMoney(activePayroll + deadCap);
   const capSpace = roundMoney(HARD_SALARY_CAP - totalPayroll);
   const floorShortfall = roundMoney(Math.max(0, SALARY_FLOOR - totalPayroll));
   return {
+    grossPayroll,
+    ilRelief,
     activePayroll,
     deadCap,
     totalPayroll,
@@ -138,9 +181,7 @@ export function getTeamPayrollSummary(
 }
 
 export function computeReleaseDeadCap(player: Player): number {
-  const years = getPlayerContractYears(player);
-  if (years <= 1) return 0;
-  return roundMoney(getPlayerSalary(player) * years * 0.5);
+  return roundMoney(getPlayerSalary(player) * 0.5);
 }
 
 export function calculateExtensionOffer(
@@ -171,6 +212,16 @@ export function normalizeLoadedPlayers(players: Player[]): Player[] {
     salary: getPlayerSalary(p),
     contractYears: getPlayerContractYears(p),
     previousTeamId: p.previousTeamId ?? null,
+    waivedByTeamId: p.waivedByTeamId ?? null,
+    waivedDeadCapHit:
+      typeof p.waivedDeadCapHit === 'number' && Number.isFinite(p.waivedDeadCapHit)
+        ? roundMoney(p.waivedDeadCapHit)
+        : 0,
+    waiverExpiresDay:
+      typeof p.waiverExpiresDay === 'number' && Number.isFinite(p.waiverExpiresDay)
+        ? p.waiverExpiresDay
+        : null,
+    injury: p.injury ?? null,
   }));
 }
 
@@ -644,14 +695,19 @@ export function evaluateTradeProposal(params: {
   const userPreSummary = getTeamPayrollSummary(userTeam, userRoster);
   const partnerPreSummary = getTeamPayrollSummary(partnerTeam, partnerRoster);
 
-  const userOutSalary = roundMoney(userSendPlayers.reduce((s, p) => s + getPlayerSalary(p), 0));
-  const aiOutSalary = roundMoney(aiSendPlayers.reduce((s, p) => s + getPlayerSalary(p), 0));
+  const userOutSalary = roundMoney(userSendPlayers.reduce((s, p) => s + getPlayerEffectiveCapHit(p), 0));
+  const aiOutSalary = roundMoney(aiSendPlayers.reduce((s, p) => s + getPlayerEffectiveCapHit(p), 0));
 
   const userPostPayroll = roundMoney(userPreSummary.totalPayroll - userOutSalary + aiOutSalary);
   const partnerPostPayroll = roundMoney(partnerPreSummary.totalPayroll - aiOutSalary + userOutSalary);
 
-  const userNewCount = userRoster.length - userSendPlayers.length + aiSendPlayers.length;
-  const partnerNewCount = partnerRoster.length - aiSendPlayers.length + userSendPlayers.length;
+  const userActiveCount = userRoster.filter((p) => !isPlayerOnIL(p)).length;
+  const partnerActiveCount = partnerRoster.filter((p) => !isPlayerOnIL(p)).length;
+  const userOutActive = userSendPlayers.filter((p) => !isPlayerOnIL(p)).length;
+  const aiOutActive = aiSendPlayers.filter((p) => !isPlayerOnIL(p)).length;
+
+  const userNewCount = userActiveCount - userOutActive + aiOutActive;
+  const partnerNewCount = partnerActiveCount - aiOutActive + userOutActive;
 
   const userBasePts =
     userSendPlayers.reduce((s, p) => s + getPlayerTradeValue(p), 0) +
@@ -699,19 +755,24 @@ export function evaluateTradeProposal(params: {
     aiReasons.push(`Values ${cheapRookieIncoming.length} cheap team-controlled rookie/bridge deal(s)`);
   }
 
-  const capBlocked =
-    hasAssets && (userPostPayroll > HARD_SALARY_CAP || partnerPostPayroll > HARD_SALARY_CAP);
+  const userCapLegal = isCapMoveLegal(userPreSummary.totalPayroll, userPostPayroll);
+  const partnerCapLegal = isCapMoveLegal(partnerPreSummary.totalPayroll, partnerPostPayroll);
+  const capBlocked = hasAssets && (!userCapLegal || !partnerCapLegal);
   const rosterBlocked = hasAssets && (userNewCount > 30 || partnerNewCount > 30);
 
   let capBlockReason: string | null = null;
-  if (userPostPayroll > HARD_SALARY_CAP && partnerPostPayroll > HARD_SALARY_CAP) {
-    capBlockReason = `Both teams exceed the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap (${userTeam?.id}: $${userPostPayroll.toFixed(2)}M, ${partnerTeam?.id}: $${partnerPostPayroll.toFixed(2)}M).`;
-  } else if (userPostPayroll > HARD_SALARY_CAP) {
-    capBlockReason = `Blocked: ${userTeam?.id} post-trade payroll ($${userPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
-  } else if (partnerPostPayroll > HARD_SALARY_CAP) {
-    capBlockReason = `Blocked: ${partnerTeam?.id} post-trade payroll ($${partnerPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
+  if (!userCapLegal && !partnerCapLegal) {
+    capBlockReason = `Both teams violate the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap (${userTeam?.id}: $${userPostPayroll.toFixed(2)}M, ${partnerTeam?.id}: $${partnerPostPayroll.toFixed(2)}M).`;
+  } else if (!userCapLegal) {
+    capBlockReason = userPreSummary.overCap
+      ? `Blocked: ${userTeam?.id} is over the $180.0M cap ($${userPreSummary.totalPayroll.toFixed(2)}M) — trade must reduce payroll (post: $${userPostPayroll.toFixed(2)}M).`
+      : `Blocked: ${userTeam?.id} post-trade payroll ($${userPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
+  } else if (!partnerCapLegal) {
+    capBlockReason = partnerPreSummary.overCap
+      ? `Blocked: ${partnerTeam?.id} is over the $180.0M cap ($${partnerPreSummary.totalPayroll.toFixed(2)}M) — trade must reduce payroll (post: $${partnerPostPayroll.toFixed(2)}M).`
+      : `Blocked: ${partnerTeam?.id} post-trade payroll ($${partnerPostPayroll.toFixed(2)}M) exceeds the $${HARD_SALARY_CAP.toFixed(1)}M Hard Cap.`;
   } else if (rosterBlocked) {
-    capBlockReason = `Blocked: Resulting roster exceeds 30 players (${userTeam?.id}: ${userNewCount}, ${partnerTeam?.id}: ${partnerNewCount}).`;
+    capBlockReason = `Blocked: Resulting active roster exceeds 30 players (${userTeam?.id}: ${userNewCount}, ${partnerTeam?.id}: ${partnerNewCount}).`;
   }
 
   const starTax = aiSendPlayers.some((p) => p.ovr >= 84) ? 1.08 : 1.0;
@@ -728,7 +789,11 @@ export function evaluateTradeProposal(params: {
       message = capBlockReason || 'Trade violates league cap or roster limits.';
     } else if (ratio >= 0.96) {
       status = 'ACCEPT';
-      message = `${partnerTeam?.city} GM: "This deal fits our roster timeline and $180.0M cap sheet. We accept."`;
+      if (userPreSummary.overCap && userPostPayroll < userPreSummary.totalPayroll) {
+        message = `${partnerTeam?.city} GM: "We accept — this salary-dump trims $${(userPreSummary.totalPayroll - userPostPayroll).toFixed(2)}M off your over-cap payroll."`;
+      } else {
+        message = `${partnerTeam?.city} GM: "This deal fits our roster timeline and $180.0M cap sheet. We accept."`;
+      }
     } else if (ratio >= 0.82) {
       status = 'CLOSE';
       message = `${partnerTeam?.city} GM: "We are close—add a mid-round pick, prospect, or extra cap relief to get it done."`;
@@ -972,6 +1037,10 @@ export function runOffseasonRollover(params: {
       age: nextAge,
       salary: getPlayerSalary(p),
       contractYears: getPlayerContractYears(p),
+      waivedByTeamId: null,
+      waivedDeadCapHit: 0,
+      waiverExpiresDay: null,
+      injury: null,
       careerStats: mergedCareer,
       seasonStats: createEmptySeasonStats(p.isPitcher),
       seasonHistory: historyEntry,
@@ -1317,9 +1386,33 @@ export function generateSeasonSchedule(teams: Team[]): ScheduleDay[] {
 }
 
 export function buildLineupAndPitching(roster: Player[]) {
-  const hitters = roster.filter((p) => !p.isPitcher).sort((a, b) => b.ovr - a.ovr);
-  const sps = roster.filter((p) => p.position === 'SP').sort((a, b) => b.ovr - a.ovr);
-  const rps = roster.filter((p) => p.position === 'RP').sort((a, b) => b.ovr - a.ovr);
+  const isHealthy = (p: Player) => !p.injury || (p.injury.daysRemaining <= 0 && !p.injury.onIL);
+  const allHitters = roster.filter((p) => !p.isPitcher).sort((a, b) => b.ovr - a.ovr);
+  const allPitchers = roster.filter((p) => p.isPitcher).sort((a, b) => b.ovr - a.ovr);
+
+  const healthyHitters = allHitters.filter(isHealthy);
+  const healthyPitchers = allPitchers.filter(isHealthy);
+
+  // Emergency fallback only if team lacks 9 healthy hitters or 2 healthy pitchers
+  const hitters =
+    healthyHitters.length >= 9
+      ? healthyHitters
+      : [
+          ...healthyHitters,
+          ...allHitters.filter((h) => !healthyHitters.includes(h) && !isPlayerOnIL(h)),
+          ...allHitters.filter((h) => !healthyHitters.includes(h) && isPlayerOnIL(h)),
+        ];
+  const pitchers =
+    healthyPitchers.length >= 2
+      ? healthyPitchers
+      : [
+          ...healthyPitchers,
+          ...allPitchers.filter((p) => !healthyPitchers.includes(p) && !isPlayerOnIL(p)),
+          ...allPitchers.filter((p) => !healthyPitchers.includes(p) && isPlayerOnIL(p)),
+        ];
+
+  const sps = pitchers.filter((p) => p.position === 'SP');
+  const rps = pitchers.filter((p) => p.position === 'RP');
 
   const usedIds = new Set<string>();
   const lineup: Player[] = [];
@@ -1342,6 +1435,277 @@ export function buildLineupAndPitching(roster: Player[]) {
   const bullpen = rps.length > 0 ? rps : sps.slice(5);
 
   return { lineup, bench, rotation, bullpen };
+}
+
+// ============================================================================
+// AGE-SCALED INJURIES, 15/60-DAY IL & REVERSE-STANDINGS WAIVER WIRE
+// ============================================================================
+
+const HITTER_INJURY_NAMES: Record<InjurySeverity, string[]> = {
+  DTD: ['Tight Hamstring', 'Bruised Wrist', 'Quad Soreness', 'Back Spasms', 'Foul Tip Contusion'],
+  IL15: ['Oblique Strain', 'Hamstring Strain', 'Ankle Sprain', 'Groin Strain', 'Shoulder Inflammation'],
+  IL60: ['Fractured Wrist', 'Torn Meniscus', 'Achilles Strain', 'Broken Collarbone', 'Labrum Tear'],
+};
+
+const PITCHER_INJURY_NAMES: Record<InjurySeverity, string[]> = {
+  DTD: ['Forearm Tightness', 'Bicep Fatigue', 'Blister on Pitching Hand', 'Back Stiffness', 'Neck Spasms'],
+  IL15: ['Shoulder Inflammation', 'Lat Strain', 'Elbow Tendinitis', 'Oblique Strain', 'Hip Impingement'],
+  IL60: ['UCL Tear / Elbow Rehab', 'Rotator Cuff Strain', 'Flexor Tendon Strain', 'Torn Labrum', 'Stress Fracture'],
+};
+
+export function getDailyInjuryProbability(age: number, isPitcher: boolean): number {
+  let base = 0.0006; // <27 low
+  if (age >= 36) base = 0.0038; // 36+ very high
+  else if (age >= 32) base = 0.0022; // 32-35 high
+  else if (age >= 27) base = 0.0012; // 27-31 moderate
+  return isPitcher ? base * 1.3 : base;
+}
+
+export function rollPlayerInjury(player: Player): PlayerInjury | null {
+  const prob = getDailyInjuryProbability(player.age, player.isPitcher);
+  if (Math.random() >= prob) return null;
+
+  const r = Math.random();
+  let severity: InjurySeverity = 'DTD';
+  let daysRemaining = 2 + Math.floor(Math.random() * 4); // 2-5d
+  if (r >= 0.88) {
+    severity = 'IL60';
+    daysRemaining = 45 + Math.floor(Math.random() * 46); // 45-90d
+  } else if (r >= 0.55) {
+    severity = 'IL15';
+    daysRemaining = 10 + Math.floor(Math.random() * 16); // 10-25d
+  }
+
+  const catalog = player.isPitcher ? PITCHER_INJURY_NAMES[severity] : HITTER_INJURY_NAMES[severity];
+  const type = catalog[Math.floor(Math.random() * catalog.length)];
+  return {
+    type,
+    severity,
+    daysRemaining,
+    onIL: null,
+  };
+}
+
+export function clearExpiredWaiverTags(players: Player[], nextDay: number): void {
+  for (const p of players) {
+    if (!p.teamId && typeof p.waiverExpiresDay === 'number' && nextDay > p.waiverExpiresDay) {
+      p.waivedByTeamId = null;
+      p.waivedDeadCapHit = 0;
+      p.waiverExpiresDay = null;
+      p.salary = MIN_PLAYER_SALARY;
+      p.contractYears = 1;
+    }
+  }
+}
+
+export function processDailyInjuriesAndWaivers(params: {
+  nextDay: number;
+  teams: Team[];
+  players: Player[];
+  tLookup: Record<string, Team>;
+  rosterLookup: Record<string, Player[]>;
+  userTeamId: string;
+  year: number;
+}): Array<{ id: string; year: number; day: number; category: string; summary: string }> {
+  const { nextDay, teams, players, tLookup, rosterLookup, userTeamId, year } = params;
+  const logs: Array<{ id: string; year: number; day: number; category: string; summary: string }> = [];
+
+  // 1. Recovery tick for existing injuries
+  for (const p of players) {
+    if (!p.injury) continue;
+    if (p.injury.daysRemaining > 0) {
+      p.injury = { ...p.injury, daysRemaining: p.injury.daysRemaining - 1 };
+    }
+    if (p.injury.daysRemaining <= 0) {
+      if (!p.injury.onIL) {
+        p.injury = null;
+      } else if (p.teamId && p.teamId !== userTeamId) {
+        // AI auto-activates healed IL player if active roster & cap permit (cutting weakest depth if full)
+        const team = tLookup[p.teamId];
+        const allTeamPlayers = rosterLookup[p.teamId] || [];
+        const activePlayers = allTeamPlayers.filter((x) => !isPlayerOnIL(x));
+        const preSummary = getTeamPayrollSummary(team, allTeamPlayers);
+        const activationAddedCost = getPlayerILRelief(p);
+
+        if (activePlayers.length < 30) {
+          const post = roundMoney(preSummary.totalPayroll + activationAddedCost);
+          if (isCapMoveLegal(preSummary.totalPayroll, post)) {
+            p.injury = null;
+          }
+        } else {
+          const weakest = [...activePlayers].sort((a, b) => a.ovr - b.ovr)[0];
+          if (weakest && weakest.ovr < p.ovr) {
+            const deadHit = computeReleaseDeadCap(weakest);
+            const post = roundMoney(
+              preSummary.totalPayroll + activationAddedCost - getPlayerEffectiveCapHit(weakest) + deadHit
+            );
+            if (isCapMoveLegal(preSummary.totalPayroll, post) && team) {
+              team.deadCap = roundMoney((team.deadCap || 0) + deadHit);
+              weakest.teamId = null;
+              weakest.waivedByTeamId = team.id;
+              weakest.waivedDeadCapHit = deadHit;
+              weakest.waiverExpiresDay = nextDay + WAIVER_PERIOD_DAYS;
+              weakest.injury = null;
+              rosterLookup[team.id] = allTeamPlayers.filter((x) => x.id !== weakest.id);
+              p.injury = null;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Age-scaled daily injury rolls for active non-injured players
+  for (const team of teams) {
+    const teamAll = rosterLookup[team.id] || [];
+    const healthyActive = teamAll.filter((p) => !isPlayerOnIL(p) && !p.injury);
+    if (healthyActive.length <= 14) continue; // protect minimum playable depth
+
+    let activeAvailableCount = teamAll.filter((p) => !isPlayerOnIL(p)).length;
+    for (const plr of healthyActive) {
+      if (activeAvailableCount <= 14) break;
+      const inj = rollPlayerInjury(plr);
+      if (!inj) continue;
+
+      if (team.id !== userTeamId && (inj.severity === 'IL15' || inj.severity === 'IL60')) {
+        inj.onIL = inj.severity === 'IL60' ? '60' : '15';
+      }
+      plr.injury = inj;
+      if (inj.onIL) activeAvailableCount--;
+
+      if (team.id === userTeamId || (inj.severity === 'IL60' && plr.ovr >= 78)) {
+        const tag = inj.severity === 'DTD' ? 'DTD' : inj.severity === 'IL15' ? '15d IL' : '60d IL';
+        logs.push({
+          id: `inj-${nextDay}-${plr.id}`,
+          year,
+          day: nextDay,
+          category: 'INJURY',
+          summary: `${team.id} ${plr.position} ${plr.name} (${plr.ovr} OVR, Age ${plr.age}) injured: ${inj.type} (${tag}, ${inj.daysRemaining}d).`,
+        });
+      }
+    }
+
+    // AI replacement fill-in signing from cleared FA pool when active roster < 26
+    if (team.id !== userTeamId) {
+      const updatedAll = rosterLookup[team.id] || [];
+      let activeNow = updatedAll.filter((p) => !isPlayerOnIL(p)).length;
+      if (activeNow < 26) {
+        const faCandidates = players
+          .filter((p) => !p.teamId && !isActiveWaiverClaim(p, nextDay))
+          .sort((a, b) => b.ovr - a.ovr);
+        const fillIn = faCandidates[0];
+        if (fillIn) {
+          const sum = getTeamPayrollSummary(team, updatedAll);
+          const post = roundMoney(sum.totalPayroll + MIN_PLAYER_SALARY);
+          if (isCapMoveLegal(sum.totalPayroll, post)) {
+            fillIn.teamId = team.id;
+            fillIn.previousTeamId = team.id;
+            fillIn.salary = MIN_PLAYER_SALARY;
+            fillIn.contractYears = 1;
+            fillIn.waivedByTeamId = null;
+            fillIn.waivedDeadCapHit = 0;
+            fillIn.waiverExpiresDay = null;
+            fillIn.injury = null;
+            updatedAll.push(fillIn);
+            rosterLookup[team.id] = updatedAll;
+            activeNow++;
+          }
+        }
+      }
+    }
+  }
+
+  // 3. Reverse-standings AI evaluation of Active Waivers (within 2-day claim window)
+  const activeWaivers = players
+    .filter((p) => isActiveWaiverClaim(p, nextDay) && p.ovr >= 63)
+    .sort((a, b) => b.ovr - a.ovr);
+
+  if (activeWaivers.length > 0) {
+    // Worst win% claims first (reverse standings order)
+    const reverseOrderAI = teams
+      .filter((t) => t.id !== userTeamId)
+      .sort((a, b) => {
+        const gA = a.wins + a.losses;
+        const gB = b.wins + b.losses;
+        const pctA = gA > 0 ? a.wins / gA : 0.5;
+        const pctB = gB > 0 ? b.wins / gB : 0.5;
+        if (pctA !== pctB) return pctA - pctB;
+        return a.runsScored - a.runsAllowed - (b.runsScored - b.runsAllowed);
+      });
+
+    for (const cand of activeWaivers) {
+      if (cand.teamId) continue;
+      for (const aiTeam of reverseOrderAI) {
+        if (cand.waivedByTeamId === aiTeam.id) continue;
+        const teamAll = rosterLookup[aiTeam.id] || [];
+        const activeRoster = teamAll.filter((p) => !isPlayerOnIL(p)).sort((a, b) => a.ovr - b.ovr);
+        const weakest = activeRoster[0];
+        const hasOpenSlot = activeRoster.length < 30;
+        const isUpgrade = hasOpenSlot ? cand.ovr >= 63 : Boolean(weakest && cand.ovr >= weakest.ovr + 3);
+        if (!isUpgrade) continue;
+
+        const aiSummary = getTeamPayrollSummary(aiTeam, teamAll);
+        const claimSal = getPlayerSalary(cand);
+
+        if (hasOpenSlot) {
+          const post = roundMoney(aiSummary.totalPayroll + claimSal);
+          if (!isCapMoveLegal(aiSummary.totalPayroll, post)) continue;
+        } else if (weakest) {
+          const cutDead = computeReleaseDeadCap(weakest);
+          const post = roundMoney(aiSummary.totalPayroll + claimSal - getPlayerEffectiveCapHit(weakest) + cutDead);
+          if (!isCapMoveLegal(aiSummary.totalPayroll, post)) continue;
+        } else {
+          continue;
+        }
+
+        // Execute waiver claim & wipe waiving team's remaining dead cap for this player
+        const waivingTeam = cand.waivedByTeamId ? tLookup[cand.waivedByTeamId] : undefined;
+        const rebatedDead = cand.waivedDeadCapHit || 0;
+        if (waivingTeam && rebatedDead > 0) {
+          waivingTeam.deadCap = Math.max(0, roundMoney((waivingTeam.deadCap || 0) - rebatedDead));
+        }
+
+        let droppedSummary = '';
+        if (!hasOpenSlot && weakest) {
+          const cutDead = computeReleaseDeadCap(weakest);
+          aiTeam.deadCap = roundMoney((aiTeam.deadCap || 0) + cutDead);
+          weakest.teamId = null;
+          weakest.waivedByTeamId = aiTeam.id;
+          weakest.waivedDeadCapHit = cutDead;
+          weakest.waiverExpiresDay = nextDay + WAIVER_PERIOD_DAYS;
+          weakest.injury = null;
+          rosterLookup[aiTeam.id] = teamAll.filter((p) => p.id !== weakest.id);
+          droppedSummary = ` and waived ${weakest.name}`;
+        }
+
+        cand.teamId = aiTeam.id;
+        cand.previousTeamId = aiTeam.id;
+        cand.waivedByTeamId = null;
+        cand.waivedDeadCapHit = 0;
+        cand.waiverExpiresDay = null;
+        if (cand.injury) cand.injury = { ...cand.injury, onIL: null };
+        rosterLookup[aiTeam.id] = [...(rosterLookup[aiTeam.id] || []), cand];
+
+        const rebateNote =
+          waivingTeam && rebatedDead > 0
+            ? ` (${waivingTeam.id} saved ${formatMoney(rebatedDead)} dead cap)`
+            : '';
+        logs.push({
+          id: `wvclaim-${nextDay}-${aiTeam.id}-${cand.id}`,
+          year,
+          day: nextDay,
+          category: 'WAIVER',
+          summary: `WAIVER CLAIM: ${aiTeam.id} claimed ${cand.position} ${cand.name} (${cand.ovr} OVR · ${formatMoney(claimSal)})${droppedSummary}${rebateNote}.`,
+        });
+        break;
+      }
+    }
+  }
+
+  // 4. Expire 2-day waiver windows for unclaimed players -> Open Free Agents ($0.75M / 1yr)
+  clearExpiredWaiverTags(players, nextDay);
+
+  return logs;
 }
 
 export function simulateSingleGame(

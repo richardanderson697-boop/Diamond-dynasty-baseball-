@@ -311,7 +311,7 @@ export function DashboardView({
               onClick={() => onNavigate('roster')}
               className="text-xs text-sky-400 hover:underline cursor-pointer"
             >
-              Full 30-Man
+              Roster &amp; IL
             </button>
           </div>
           <div className="space-y-2">
@@ -332,6 +332,11 @@ export function DashboardView({
                       </span>
                       <span className="text-xs font-bold text-white truncate">{p.name}</span>
                       <span className="text-[11px] font-mono text-slate-500">({p.age})</span>
+                      {p.injury && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono text-[10px] font-bold">
+                          {p.injury.onIL ? `${p.injury.onIL}d IL` : p.injury.severity} · {p.injury.daysRemaining}d
+                        </span>
+                      )}
                     </div>
                     <div className="text-[11px] text-slate-400 mt-0.5 pl-9 font-mono">{summaryStat}</div>
                   </div>

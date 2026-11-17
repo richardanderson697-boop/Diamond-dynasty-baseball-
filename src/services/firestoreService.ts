@@ -231,6 +231,16 @@ function rehydratePlayerFromFirestore(raw: Player & { _inDraftPool?: boolean }):
     seasonStats: { ...createEmptySeasonStats(isPitcher), ...(rest.seasonStats || {}) },
     careerStats: { ...createEmptySeasonStats(isPitcher), ...(rest.careerStats || {}) },
     previousTeamId: rest.previousTeamId ?? null,
+    waivedByTeamId: rest.waivedByTeamId ?? null,
+    waivedDeadCapHit:
+      typeof rest.waivedDeadCapHit === 'number' && Number.isFinite(rest.waivedDeadCapHit)
+        ? roundMoney(rest.waivedDeadCapHit)
+        : 0,
+    waiverExpiresDay:
+      typeof rest.waiverExpiresDay === 'number' && Number.isFinite(rest.waiverExpiresDay)
+        ? rest.waiverExpiresDay
+        : null,
+    injury: rest.injury ?? null,
   };
   hydratedBase.salary = getPlayerSalary(hydratedBase);
   hydratedBase.contractYears = getPlayerContractYears(hydratedBase);
@@ -258,6 +268,21 @@ function sanitizePlayerForFirestore(p: Player): Record<string, unknown> {
     careerStats: compactStatsForFirestore(p.careerStats),
   };
   if (p.previousTeamId) clean.previousTeamId = p.previousTeamId;
+  if (p.waivedByTeamId) clean.waivedByTeamId = p.waivedByTeamId;
+  if (typeof p.waivedDeadCapHit === 'number' && p.waivedDeadCapHit > 0) {
+    clean.waivedDeadCapHit = roundMoney(p.waivedDeadCapHit);
+  }
+  if (typeof p.waiverExpiresDay === 'number') {
+    clean.waiverExpiresDay = Math.round(p.waiverExpiresDay);
+  }
+  if (p.injury) {
+    clean.injury = {
+      type: String(p.injury.type || 'Soreness').slice(0, 48),
+      severity: p.injury.severity,
+      daysRemaining: Math.max(0, Math.round(p.injury.daysRemaining)),
+      onIL: p.injury.onIL ?? null,
+    };
+  }
   if (p.power !== undefined) clean.power = Math.round(p.power);
   if (p.speed !== undefined) clean.speed = Math.round(p.speed);
   if (p.glove !== undefined) clean.glove = Math.round(p.glove);

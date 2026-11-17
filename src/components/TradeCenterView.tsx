@@ -6,9 +6,11 @@ import {
   formatMoney,
   getDraftPickTradeValue,
   getPlayerContractYears,
-  getPlayerSalary,
+  getPlayerEffectiveCapHit,
   getPlayerTradeValue,
   HARD_SALARY_CAP,
+  isCapMoveLegal,
+  isPlayerOnIL,
 } from '../engine/baseballEngine';
 import { RatingBadge } from './SharedBadges';
 
@@ -127,7 +129,7 @@ export function TradeCenterView({
               Front Office Trade Center
             </h2>
             <p className="text-xs text-slate-400 mt-0.5">
-              Package up to 4 players &amp; 4 picks per side. Strictly enforces the $180.00M Hard Cap and 30-man limit on both teams.
+              Package up to 4 players &amp; 4 picks per side. Teams over the $180.00M Hard Cap may trade freely if the move reduces payroll.
             </p>
           </div>
 
@@ -162,7 +164,9 @@ export function TradeCenterView({
             },
           ].map((sheet) => {
             const postSpace = HARD_SALARY_CAP - sheet.postPayroll;
-            const overCap = sheet.postPayroll > HARD_SALARY_CAP;
+            const capIllegal = !isCapMoveLegal(sheet.pre.totalPayroll, sheet.postPayroll);
+            const overCapDumpAllowed =
+              sheet.pre.overCap && sheet.postPayroll < sheet.pre.totalPayroll;
             return (
               <div
                 key={sheet.label}
@@ -172,15 +176,30 @@ export function TradeCenterView({
                   <div className="font-sans font-bold text-slate-200">{sheet.label}</div>
                   <div className="text-[11px] text-slate-400 mt-0.5">
                     Payroll {formatMoney(sheet.pre.totalPayroll)} · Space{' '}
-                    <span className="text-emerald-400">{formatMoney(sheet.pre.capSpace)}</span> · Dead{' '}
-                    <span className="text-rose-300">{formatMoney(sheet.pre.deadCap)}</span>
+                    <span className={sheet.pre.capSpace < 0 ? 'text-rose-400' : 'text-emerald-400'}>
+                      {formatMoney(sheet.pre.capSpace)}
+                    </span>{' '}
+                    · Dead <span className="text-rose-300">{formatMoney(sheet.pre.deadCap)}</span>
+                    {sheet.pre.ilRelief > 0 && (
+                      <span className="text-sky-300"> · IL +{formatMoney(sheet.pre.ilRelief)}</span>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="text-[11px] text-slate-400">Post-Trade</div>
-                  <div className={`font-bold ${overCap ? 'text-rose-400' : 'text-white'}`}>
+                  <div className="text-[11px] text-slate-400">
+                    {overCapDumpAllowed ? 'Post-Trade (Dump Legal)' : 'Post-Trade'}
+                  </div>
+                  <div
+                    className={`font-bold ${
+                      capIllegal
+                        ? 'text-rose-400'
+                        : overCapDumpAllowed
+                        ? 'text-emerald-400'
+                        : 'text-white'
+                    }`}
+                  >
                     {formatMoney(sheet.postPayroll)}{' '}
-                    <span className={overCap ? 'text-rose-400' : 'text-slate-400'}>
+                    <span className={capIllegal ? 'text-rose-400' : overCapDumpAllowed ? 'text-emerald-300' : 'text-slate-400'}>
                       ({postSpace >= 0 ? `${formatMoney(postSpace)} free` : `${formatMoney(Math.abs(postSpace))} over`})
                     </span>
                   </div>
@@ -323,14 +342,19 @@ export function TradeCenterView({
 
             <div>
               <div className="text-[11px] font-semibold text-slate-400 mb-2">
-                Active Roster ({side.roster.length}/30)
+                Active Roster ({side.roster.filter((p) => !isPlayerOnIL(p)).length}/30
+                {side.roster.some((p) => isPlayerOnIL(p))
+                  ? ` + ${side.roster.filter((p) => isPlayerOnIL(p)).length} IL`
+                  : ''}
+                )
               </div>
               <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/70 border border-slate-800 rounded-lg">
                 {side.roster.map((p) => {
                   const active = side.selPlayers.includes(p.id);
                   const val = getPlayerTradeValue(p);
-                  const sal = getPlayerSalary(p);
+                  const effSal = getPlayerEffectiveCapHit(p);
                   const yrs = getPlayerContractYears(p);
+                  const onIL = isPlayerOnIL(p);
                   return (
                     <div
                       key={p.id}
@@ -354,10 +378,15 @@ export function TradeCenterView({
                           {p.name}
                         </span>
                         <span className="text-[11px] font-mono text-slate-500">({p.age}y)</span>
+                        {onIL && (
+                          <span className="px-1 py-0.5 rounded bg-amber-500/15 text-amber-300 font-mono text-[10px]">
+                            {p.injury?.onIL}d IL
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 shrink-0 font-mono tabular-nums">
                         <span className="text-[11px] text-slate-300">
-                          {formatMoney(sal)}/{yrs}y
+                          {formatMoney(effSal)}/{yrs}y
                         </span>
                         <span className="text-[11px] text-slate-500">{val}p</span>
                         <RatingBadge value={p.ovr} />

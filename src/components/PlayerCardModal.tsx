@@ -86,6 +86,14 @@ export function PlayerCardModal({
                 <span className="font-mono tabular-nums text-emerald-300">
                   {formatMoney(salary)} / {contractYears} yr{contractYears > 1 ? 's' : ''}
                 </span>
+                {player.injury && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/35 font-mono font-bold">
+                      {player.injury.type} ({player.injury.onIL ? `${player.injury.onIL}d IL` : player.injury.severity} · {player.injury.daysRemaining}d)
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
